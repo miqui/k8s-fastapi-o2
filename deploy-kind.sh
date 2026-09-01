@@ -49,9 +49,11 @@ kubectl apply -k k8s/observability/
 echo "=> Applying Kubernetes manifests..."
 kubectl apply -k k8s/
 
-# 8. Wait for PostgreSQL to be ready before the API rolls out
+# 8. Wait for PostgreSQL and Hazelcast to be ready before the API rolls out
 echo "=> Waiting for PostgreSQL StatefulSet to be ready..."
 kubectl rollout status statefulset/postgres --timeout=120s
+echo "=> Waiting for Hazelcast to be ready..."
+kubectl rollout status deployment/hazelcast --timeout=120s
 
 # 9. Wait for the observability stack to be ready
 echo "=> Waiting for observability stack to be ready..."
@@ -70,6 +72,9 @@ kubectl get nodes -L workload -o wide
 echo ""
 echo "==================== PostgreSQL Pod ====================="
 kubectl get pods -l app=postgres -o wide
+echo ""
+echo "==================== Hazelcast Pod ======================="
+kubectl get pods -l app=hazelcast -o wide
 echo ""
 echo "==================== Application Pods ==================="
 kubectl get pods -l app=message-service -o wide

@@ -53,6 +53,17 @@
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
 
+		<!-- Hazelcast-backed lookup cache; app connects as a client to the standalone
+		     Hazelcast member(s) deployed on their own node - see config.HazelcastConfig -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-cache</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.hazelcast</groupId>
+			<artifactId>hazelcast-spring</artifactId>
+		</dependency>
+
 		<!-- MyBatis ORM + PostgreSQL driver -->
 		<dependency>
 			<groupId>org.mybatis.spring.boot</groupId>

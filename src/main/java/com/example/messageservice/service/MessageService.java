@@ -6,6 +6,8 @@ import com.example.messageservice.exception.ResourceNotFoundException;
 import com.example.messageservice.mapper.MessageMapper;
 import com.example.messageservice.model.Message;
 import jakarta.annotation.PostConstruct;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -39,6 +41,7 @@ public class MessageService {
         return messageMapper.findAll();
     }
 
+    @Cacheable(value = "messages", key = "#id")
     public Message getMessageById(String id) {
         return messageMapper.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Message with ID '" + id + "' was not found."));
@@ -55,6 +58,7 @@ public class MessageService {
         return new Message(id, title, content, sender, createdAt);
     }
 
+    @CacheEvict(value = "messages", key = "#id")
     public Message updateMessage(String id, UpdateMessageRequest request) {
         Message existing = getMessageById(id);
         String updatedTitle = request.title() != null && !request.title().isBlank()
@@ -66,6 +70,7 @@ public class MessageService {
         return new Message(existing.id(), updatedTitle, updatedContent, existing.sender(), existing.createdAt());
     }
 
+    @CacheEvict(value = "messages", key = "#id")
     public void deleteMessage(String id) {
         if (messageMapper.deleteById(id) == 0) {
             throw new ResourceNotFoundException("Message with ID '" + id + "' was not found.");

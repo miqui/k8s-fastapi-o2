@@ -13,13 +13,34 @@ actuator probes) is unchanged — only the persistence layer differs.
 - **API**: Spring Boot 4 / Java 21, `MessageController` -> `MessageService` -> `MessageMapper` (MyBatis).
 - **Persistence**: MyBatis 3 mapper (`src/main/resources/mapper/MessageMapper.xml`) against PostgreSQL 16.
   Schema is created on startup from `src/main/resources/schema.sql` (idempotent `CREATE TABLE IF NOT EXISTS`).
-- **Cluster topology** (`k8s/kind-config.yaml`): 1 control-plane + 4 workers.
+- **Cluster topology** (`k8s/kind-config.yaml`): 1 control-plane + 5 workers.
   - 2 workers labeled `workload=api` — the `message-service` Deployment (2 replicas) is pinned there
     via `nodeSelector`, with preferred pod anti-affinity so the two replicas spread across those nodes.
   - 1 worker labeled `workload=db` — the `postgres` StatefulSet (1 replica, with a `PersistentVolumeClaim`)
     is pinned there via `nodeSelector`.
   - 1 worker labeled `workload=observability` — the OTel Collector, Prometheus, and Grafana
     Deployments (see below) are pinned there via `nodeSelector`.
+  - 1 worker labeled `workload=cache` — the `hazelcast` Deployment (see below) is pinned there
+    via `nodeSelector`.
+- **Lookup cache**: `MessageService.getMessageById` is `@Cacheable` (cache name `messages`), backed by
+  a standalone [Hazelcast](https://github.com/hazelcast/hazelcast) member (`k8s/hazelcast-deployment.yaml`,
+  `k8s/hazelcast-service.yaml`) that each `message-service` pod connects to as a **client**
+  (`com.example.messageservice.config.HazelcastConfig`) rather than embedding a member per pod - that
+  keeps the cache independent of app pod restarts/scaling. `updateMessage`/`deleteMessage` are
+  `@CacheEvict` to keep the shared cache correct. The app falls back to a plain in-memory
+  `ConcurrentMapCacheManager` under the `test` Spring profile (`src/test/java/.../config/TestCacheConfig.java`),
+  since tests run with no Hazelcast server available.
+
+  There's deliberately no client-side Near Cache here: it was tried and removed after verifying
+  (in a real 2-pod deployment) that it went stale across pods after `@CacheEvict` - a pod other
+  than the one that wrote an update kept serving old data indefinitely, since the client SDK's
+  cross-client near-cache invalidation broadcast wasn't reliably reaching the other pod's near-cache.
+  Reads go straight to the shared Hazelcast member instead, which stays correct - see
+  `HazelcastConfig`'s Javadoc. Also note: Spring Boot's `cache.gets`/`cache.puts` Micrometer metrics
+  read 0 for this cache regardless - they poll `getLocalMapStats()`, which isn't populated for a plain
+  (non-near-cache) Hazelcast client map. The caching itself works (verified via response latency: a
+  cold lookup vs. a warm one, and via direct cross-pod consistency checks after update/delete), it's
+  just not visible through that particular metric.
 - **Ingress**: the control-plane node is labeled `ingress-ready=true` and maps host ports 80/443
   (see [kind's Ingress guide](https://kind.sigs.k8s.io/docs/user/ingress/)). `deploy-kind.sh` installs
   the ingress-nginx controller, and `k8s/ingress.yaml` routes all paths to `message-service`
@@ -40,12 +61,17 @@ actuator probes) is unchanged — only the persistence layer differs.
 
 ### 1. Local run against a PostgreSQL instance
 
-Start a local PostgreSQL instance (or reuse the one deployed in kind — see below) and point the app at it:
+Start a local PostgreSQL instance (or reuse the one deployed in kind — see below), plus a local
+Hazelcast member for the cache, and point the app at both:
 
 ```bash
 docker run --rm -d --name message-postgres \
   -e POSTGRES_DB=messagedb -e POSTGRES_USER=message_app -e POSTGRES_PASSWORD=message_app \
   -p 5432:5432 postgres:16-alpine
+
+docker run --rm -d --name message-hazelcast \
+  -e HZ_CLUSTERNAME=message-service-cache \
+  -p 5701:5701 hazelcast/hazelcast:5.5.0
 
 java -Xms512m -Xmx1024m \
      -XX:+UseG1GC \
@@ -59,7 +85,11 @@ java -Xms512m -Xmx1024m \
 
 Datasource connection details are configurable via environment variables (see
 `src/main/resources/application.properties`): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`.
-Defaults connect to `localhost:5432/messagedb` with `message_app`/`message_app`.
+Defaults connect to `localhost:5432/messagedb` with `message_app`/`message_app`. Hazelcast connection
+details are `HAZELCAST_HOST`/`HAZELCAST_PORT`, defaulting to `localhost:5701`. If you skip starting a
+local Hazelcast member, the app will fail to start (the client connection is required, not optional) -
+that's deliberate, matching how the DB connection behaves; there's no profile that runs with the cache
+disabled outside of tests.
 
 ---
 
@@ -113,13 +143,16 @@ PostgreSQL instance. Production and the kind deployment still use real PostgreSQ
 ## Deployment with Kind / Kubernetes
 
 - **Deploy to local Kind cluster**: `./deploy-kind.sh`
-  - Creates a 4-node kind cluster (1 control-plane, 2 API workers, 1 DB worker) if it doesn't exist yet.
+  - Creates a 6-node kind cluster (1 control-plane, 2 API workers, 1 DB worker, 1 observability
+    worker, 1 cache worker) if it doesn't exist yet.
   - Installs the ingress-nginx controller and waits for it to become ready.
   - Builds the `message-service:latest` image and loads it into the cluster.
-  - Applies `k8s/` via Kustomize: `Secret` + `ConfigMap`s, the `postgres` `StatefulSet`/headless `Service`,
-    the `message-service` `Deployment`/`Service` (`ClusterIP`), and an `Ingress` routing to it.
-  - Waits for PostgreSQL to become ready before waiting on the API rollout (the API Deployment also runs a
-    `wait-for-postgres` init container using `pg_isready`).
+  - Applies `k8s/observability/` (OTel Collector, Prometheus, Grafana - see Architecture above).
+  - Applies `k8s/` via Kustomize: `Secret` + `ConfigMap`s, the `postgres` `StatefulSet`/headless
+    `Service`, the `hazelcast` `Deployment`/`Service`, the `message-service` `Deployment`/`Service`
+    (`ClusterIP`), and an `Ingress` routing to it.
+  - Waits for PostgreSQL and Hazelcast to become ready before waiting on the API rollout (the API
+    Deployment also runs `wait-for-postgres` and `wait-for-hazelcast` init containers).
 - **Tear down cluster**: `./teardown-kind.sh`
 - **Test endpoints**: `./test-api.sh`
 
@@ -284,3 +317,69 @@ To launch with external JProfiler from IntelliJ without installing plugins:
    -agentpath:/Applications/JProfiler.app/Contents/Resources/app/bin/macos/libjprofilerti.jnilib=port=8849,nowait
    ```
 3. Run or Debug normally in IntelliJ, then open JProfiler and use **Attach to remote JVM** on `localhost:8849`.
+
+---
+
+## Load Testing with k6
+
+The repository includes four parameterized [k6](https://k6.io/) scripts using `k6-utils` to benchmark
+and simulate concurrent traffic against the REST API. They all follow the same conventions (same
+environment variables, same VU/think-time shape), so any of the "Running the Load Tests" commands
+below work with any of them - just swap the filename.
+
+| Script | What it exercises |
+| :--- | :--- |
+| `k6-retrieve-messages.js` | `GET /api/messages` (read path). |
+| `k6-create-messages.js` | `POST /api/messages` (write path). |
+| `k6-message-lifecycle.js` | Full CRUD per iteration: create -> get by id -> update -> delete. |
+| `k6-invalid-requests.js` | Negative paths: invalid create (400), missing id (404), blank id (400) - all RFC 9457 problem-details responses. |
+
+### Prerequisites
+
+Install `k6` using Homebrew or your package manager:
+
+```bash
+brew install k6
+```
+
+### Script Configuration
+
+Every script supports the same environment variables:
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `VUS` | Number of concurrent virtual users | `10` |
+| `DURATION` | Duration of the test run (e.g. `10s`, `1m`) | `10s` |
+| `BASE_URL` | Target API endpoint URL | `http://localhost/api/messages` |
+
+**Built-in Thresholds:**
+- `http_req_failed`: error rate must remain below 1% (`rate<0.01`).
+- `http_req_duration`: 95th percentile latency must be under 500ms (`p(95)<500`).
+
+`k6-invalid-requests.js` is the one exception: every request in it *intentionally* gets a 4xx
+response, and k6 counts any non-2xx/3xx as `http_req_failed` by default - so that metric would
+always read ~100% there and isn't a useful signal. It uses `checks: ['rate>0.99']` instead, which
+measures what actually matters for that script: did the API return the *correct* error (status +
+problem-details body) essentially every time.
+
+### Running the Load Tests
+
+#### 1. Default Run (10 VUs for 10s)
+```bash
+k6 run k6-retrieve-messages.js
+```
+
+#### 2. Parameterized using `-e` flags (Recommended)
+```bash
+k6 run -e VUS=25 -e DURATION=30s k6-create-messages.js
+```
+
+#### 3. Parameterized using shell environment variables
+```bash
+VUS=50 DURATION=1m k6 run k6-message-lifecycle.js
+```
+
+#### 4. Custom endpoint / remote target
+```bash
+k6 run -e BASE_URL=http://localhost:8080/api/messages -e VUS=20 -e DURATION=15s k6-invalid-requests.js
+```
