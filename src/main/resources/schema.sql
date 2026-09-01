@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS messages (
+    id VARCHAR(36) PRIMARY KEY,
+    title VARCHAR(100) NOT NULL,
+    content VARCHAR(1000) NOT NULL,
+    sender VARCHAR(50) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);

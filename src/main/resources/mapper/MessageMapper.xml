@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.messageservice.mapper.MessageMapper">
+
+    <resultMap id="messageResultMap" type="com.example.messageservice.model.Message">
+        <constructor>
+            <idArg column="id" javaType="string"/>
+            <arg column="title" javaType="string"/>
+            <arg column="content" javaType="string"/>
+            <arg column="sender" javaType="string"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <select id="findAll" resultMap="messageResultMap">
+        SELECT id, title, content, sender, created_at
+        FROM messages
+        ORDER BY created_at
+    </select>
+
+    <select id="findById" resultMap="messageResultMap">
+        SELECT id, title, content, sender, created_at
+        FROM messages
+        WHERE id = #{id}
+    </select>
+
+    <insert id="insert">
+        INSERT INTO messages (id, title, content, sender, created_at)
+        VALUES (#{id}, #{title}, #{content}, #{sender}, #{createdAt})
+    </insert>
+
+    <update id="update">
+        UPDATE messages
+        SET title = #{title}, content = #{content}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM messages
+        WHERE id = #{id}
+    </delete>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM messages
+    </select>
+
+</mapper>
