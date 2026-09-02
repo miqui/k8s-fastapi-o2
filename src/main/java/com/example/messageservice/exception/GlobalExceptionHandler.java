@@ -2,6 +2,7 @@ package com.example.messageservice.exception;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -174,6 +175,26 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
         return ResponseEntity
                 .status(HttpStatus.NOT_FOUND)
+                .contentType(PROBLEM_JSON_MEDIA_TYPE)
+                .body(problemDetail);
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ProblemDetail> handleOptimisticLockingFailureException(
+            OptimisticLockingFailureException ex,
+            HttpServletRequest request) {
+
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.CONFLICT,
+                ex.getMessage()
+        );
+        problemDetail.setType(URI.create("https://example.com/problems/conflict"));
+        problemDetail.setTitle("Conflict");
+        problemDetail.setInstance(URI.create(request.getRequestURI()));
+        problemDetail.setProperty("timestamp", Instant.now());
+
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
                 .contentType(PROBLEM_JSON_MEDIA_TYPE)
                 .body(problemDetail);
     }

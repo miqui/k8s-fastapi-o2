@@ -21,6 +21,11 @@ data:
     exporters:
       prometheus:
         endpoint: 0.0.0.0:8889
+        # Without this, OTLP resource attributes (service.name, k8s.pod.name, ...) don't
+        # become Prometheus labels - only metric-level attributes do by default, so every
+        # pod's metrics would collapse into one indistinguishable series.
+        resource_to_telemetry_conversion:
+          enabled: true
       debug:
         verbosity: basic
 

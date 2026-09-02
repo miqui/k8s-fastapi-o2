@@ -196,23 +196,84 @@ that grant full cluster-admin access to this kind cluster (`.gitignore` already 
 > kind cluster. Do not reuse them, and manage real secrets with a proper secrets manager in any
 > shared or production environment.
 
+### Adding a new kind node
+
+Unlike the code-push flow above, node topology **cannot** be changed on a running kind cluster —
+kind has no "add node" command, since each node's kubeadm role is fixed at `kind create cluster`
+time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
+
+1. **Add the new worker to `k8s/kind-config.yaml`**, matching the existing API workers' pattern:
+   ```yaml
+     - role: worker
+       kubeadmConfigPatches:
+         - |
+           kind: JoinConfiguration
+           nodeRegistration:
+             kubeletExtraArgs:
+               node-labels: "workload=api"
+   ```
+
+2. **Recreate the cluster** with the updated config:
+   ```bash
+   kind delete cluster --name kind-springboot-mybatis-cluster
+   kind create cluster --name kind-springboot-mybatis-cluster --config k8s/kind-config.yaml
+   ```
+   This wipes all cluster state (PostgreSQL data, any messages created only at runtime) - it's a
+   fresh cluster, rebuilt from the manifests in `k8s/`.
+
+3. **Bump the API replica count** in `k8s/deployment.yaml` (`spec.replicas: 2` -> `3`). The
+   Deployment's `nodeSelector: workload: api` already targets any node with that label; it's the
+   extra replica - combined with the existing `podAntiAffinity` spread by `kubernetes.io/hostname`
+   - that actually lands a pod on the new node instead of just adding another pod to an
+   already-occupied one.
+
+4. **Redeploy** - since the cluster is new, `deploy-kind.sh` detects it doesn't exist yet and
+   recreates it from step 1's config, then reapplies every manifest including the new replica count:
+   ```bash
+   ./deploy-kind.sh
+   ```
+
+5. **Verify** the new node exists and is running the API:
+   ```bash
+   kubectl get nodes -L workload -o wide
+   kubectl get pods -l app=message-service -o wide
+   ```
+   Confirm a `message-service` pod's `NODE` column shows the new worker.
+
 ### Viewing metrics in Grafana
 
 `deploy-kind.sh` also applies `k8s/observability/` (a separate Kustomization, in its own
 `observability` namespace) and waits for it to roll out. Once deployed:
 
 - **Grafana**: `http://grafana.localhost/` — log in with `admin`/`admin` (same local-dev-only caveat
-  as `k8s/secret.yaml` applies to `k8s/observability/grafana-secret.yaml`) and open the pre-provisioned
-  **message-service** dashboard. It's provisioned from `k8s/observability/grafana-dashboard-json-configmap.yaml`
-  as plain PromQL against real, verified metric names — if you add new panels, check the exact metric
-  names Prometheus actually stores first (they differ from the raw OTLP names — see below).
+  as `k8s/secret.yaml` applies to `k8s/observability/grafana-secret.yaml`) and open one of three
+  pre-provisioned dashboards, all in `k8s/observability/grafana-dashboard-json-configmap.yaml` as plain
+  PromQL against real, verified metric names - if you add new panels, check the exact metric names
+  Prometheus actually stores first (they differ from the raw OTLP names — see below):
+  - **message-service**: app-level request rate/latency, JVM heap, GC pauses, HikariCP connections,
+    CPU, thread count.
+  - **kind cluster ops**: cluster-wide node/pod health - nodes ready, pod phases/restarts, per-node
+    CPU/memory/disk (via node-exporter), per-namespace container CPU/memory (via cAdvisor).
+  - **JVM & GC**: a `message-service`-only deep dive per JVM-GC.md's tuning goals - heap by region,
+    non-heap, container memory vs. its limit, GC pause/frequency/allocation/promotion rate, thread
+    states, class loading. Panels are colored against JVM-GC.md's own targets (85% memory ceiling,
+    100ms max GC pause, 70-75% heap headroom) so you can see at a glance whether tuning changes are
+    landing. Broken down **per pod** (`k8s_pod_name` label) rather than merged across replicas - see
+    the two fixes below, both required for that to work at all.
 - **Prometheus** (not exposed via Ingress; use `kubectl port-forward -n observability svc/prometheus 9090:9090`
-  if you want its own UI at `http://localhost:9090`): scrapes `otel-collector.observability.svc.cluster.local:8889`,
-  the OTel Collector's Prometheus exporter.
+  if you want its own UI at `http://localhost:9090`): scrapes `otel-collector.observability.svc.cluster.local:8889`
+  (app metrics), plus `kube-state-metrics` and every `node-exporter` pod, and every node's kubelet
+  cAdvisor endpoint via the API server proxy (see `k8s/observability/prometheus-configmap.yaml` and
+  `prometheus-rbac.yaml`) for the cluster-ops dashboard.
 - **OTel Collector** (`k8s/observability/otel-collector-configmap.yaml`): receives OTLP metrics on
   `:4317` (gRPC) / `:4318` (HTTP) from every `message-service` pod
   (`OTEL_METRICS_URL` in `k8s/configmap.yaml` points at it) and re-exports them in Prometheus format
-  on `:8889`.
+  on `:8889`. Two things had to be true for per-pod JVM metrics to actually work, both already wired
+  up: (1) `resource_to_telemetry_conversion.enabled: true` on the Prometheus exporter - without it,
+  OTLP *resource* attributes like `k8s.pod.name` are dropped rather than becoming Prometheus labels,
+  so metrics from every pod collapse into one indistinguishable series; (2) the app itself has to send
+  that resource attribute in the first place (`management.opentelemetry.resource-attributes.k8s.pod.name`
+  in `application.properties`, sourced from a `POD_NAME` Downward API env var in `k8s/deployment.yaml`).
 
 Metric names go through two translations before they reach Prometheus: Micrometer's own names
 (`http.server.requests`) become OTLP metric names, then the Collector's Prometheus exporter
@@ -333,6 +394,7 @@ below work with any of them - just swap the filename.
 | `k6-create-messages.js` | `POST /api/messages` (write path). |
 | `k6-message-lifecycle.js` | Full CRUD per iteration: create -> get by id -> update -> delete. |
 | `k6-invalid-requests.js` | Negative paths: invalid create (400), missing id (404), blank id (400) - all RFC 9457 problem-details responses. |
+| `k6-transaction-isolation.js` | Concurrency/lost-update regression test for `PUT /api/messages/{id}`'s optimistic locking - see [Concurrency & Transaction Isolation](#concurrency--transaction-isolation). |
 
 ### Prerequisites
 
@@ -362,6 +424,10 @@ always read ~100% there and isn't a useful signal. It uses `checks: ['rate>0.99'
 measures what actually matters for that script: did the API return the *correct* error (status +
 problem-details body) essentially every time.
 
+`k6-transaction-isolation.js` also deviates: a 409 Conflict from a losing optimistic-lock race is an
+*expected*, correct response, not a failure, so its `PUT` calls use `http.expectedStatuses(200, 409)`
+to keep those out of `http_req_failed`. See the next section for what it's actually checking.
+
 ### Running the Load Tests
 
 #### 1. Default Run (10 VUs for 10s)
@@ -383,3 +449,71 @@ VUS=50 DURATION=1m k6 run k6-message-lifecycle.js
 ```bash
 k6 run -e BASE_URL=http://localhost:8080/api/messages -e VUS=20 -e DURATION=15s k6-invalid-requests.js
 ```
+
+## Concurrency & Transaction Isolation
+
+**Isolation-level review.** Nothing in this codebase sets a transaction isolation level anywhere -
+not in `application.properties`, not on HikariCP, not via `@Transactional`, and there's no
+`@Transactional` annotation on `MessageService` at all. MyBatis's `SqlSessionTemplate`, with no
+active Spring-managed transaction, opens and commits a fresh autocommit session **per mapper
+call**, so every read or write individually runs at PostgreSQL's unmodified default
+(`READ COMMITTED`). Tuning that level wouldn't have mattered here, though: the real bug wasn't
+*which* isolation level applied to each statement, it was that `updateMessage()` used to run its
+read (`findById`) and its write (`update`) as **two entirely separate, uncoordinated
+transactions** - no isolation level closes a gap between two unrelated transactions.
+
+**The bug.** A classic lost update: two concurrent callers could both read the same row, then both
+write, with the second write silently overwriting the first's change with no error to either
+caller.
+
+**The fix - optimistic locking via a `version` column.** `messages` now has a `version INTEGER`
+column (see `schema.sql`'s idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, since
+`spring.sql.init.mode=always` reruns it on every startup against tables that may predate it).
+`GET` responses include `version`, and `PUT /api/messages/{id}` requires the caller to send back
+the version it read:
+
+```json
+{ "title": "New title", "content": "New content", "version": 3 }
+```
+
+`MessageMapper.update` applies the write conditionally - `UPDATE messages SET ..., version =
+version + 1 WHERE id = ? AND version = ?` - using **the version the client submitted**, not a
+version the server re-reads for itself. That distinction matters: guarding against a server's own
+just-read value only protects the few microseconds between that read and its own write: it can't
+tell whether the *client's* value was stale, and a stale client value is exactly what happens on a
+real GET-then-PUT flow. If the row has moved on since the client's read, 0 rows match and
+`GlobalExceptionHandler` turns that into `409 Conflict` (`OptimisticLockingFailureException`) with
+a problem-details body telling the caller to refetch and retry - instead of silently losing their
+change.
+
+**Verifying it - `k6-transaction-isolation.js`.** The script has many VUs race to increment a
+counter kept in one message's `content` field: each iteration does `GET` (reads `content` and
+`version`) then `PUT` (submits `content + 1` guarded by the `version` it just read). Every `200`
+must correspond to a real, distinct `+1`; `409`s are expected under contention and are reported
+separately (`write_conflicts`), not counted as failures. Run it and compare the two custom metrics
+in the summary:
+
+```bash
+VUS=20 DURATION=15s k6 run k6-transaction-isolation.js
+```
+
+```
+successful_increments..........: 213    ...
+final_counter_value.............: avg=212 ...   <- best-effort read; see below
+write_conflicts.................: 28723  ...
+```
+
+`successful_increments` and `final_counter_value` should be equal. `final_counter_value` is read
+back through the app's own `GET` endpoint, which goes through the Hazelcast-backed `@Cacheable`
+read-through cache (see `HazelcastConfig`) - immediately after a burst of writes, that cache's own
+eviction can lag the true row by a count or two, so a trailing gap of 1-2 there is a read artifact
+of the *cache*, not a lost update. To see the authoritative value, query Postgres directly:
+
+```bash
+kubectl exec -i postgres-0 -- psql -U message_app -d messagedb \
+  -c "SELECT content, version FROM messages WHERE sender = 'k6-isolation-test';"
+```
+
+**Note:** because `PUT` now requires `version`, `k6-message-lifecycle.js`'s update step sends
+`version: 0` (correct immediately after its own `create` step, since a freshly created message
+always starts at version 0).

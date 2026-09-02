@@ -100,7 +100,7 @@ class MessageControllerTest {
     @Test
     void shouldUpdateMessage() throws Exception {
         Message created = messageService.createMessage(new CreateMessageRequest("Original", "Original Content", "charlie"));
-        UpdateMessageRequest updateRequest = new UpdateMessageRequest("Updated Title", "Updated Content");
+        UpdateMessageRequest updateRequest = new UpdateMessageRequest("Updated Title", "Updated Content", created.version());
 
         mockMvc.perform(put("/api/messages/{id}", created.id())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -108,7 +108,24 @@ class MessageControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id", is(created.id())))
                 .andExpect(jsonPath("$.title", is("Updated Title")))
-                .andExpect(jsonPath("$.content", is("Updated Content")));
+                .andExpect(jsonPath("$.content", is("Updated Content")))
+                .andExpect(jsonPath("$.version", is(created.version() + 1)));
+    }
+
+    @Test
+    void shouldReturn409ProblemDetailsWhenUpdatingWithStaleVersion() throws Exception {
+        Message created = messageService.createMessage(new CreateMessageRequest("Original", "Original Content", "charlie"));
+        int staleVersion = created.version() + 1;
+        UpdateMessageRequest updateRequest = new UpdateMessageRequest("Updated Title", "Updated Content", staleVersion);
+
+        mockMvc.perform(put("/api/messages/{id}", created.id())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isConflict())
+                .andExpect(header().string("Content-Type", containsString("application/problem+json")))
+                .andExpect(jsonPath("$.type", is("https://example.com/problems/conflict")))
+                .andExpect(jsonPath("$.title", is("Conflict")))
+                .andExpect(jsonPath("$.status", is(409)));
     }
 
     @Test

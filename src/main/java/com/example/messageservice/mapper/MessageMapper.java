@@ -26,7 +26,8 @@ public interface MessageMapper {
     int update(
             @Param("id") String id,
             @Param("title") String title,
-            @Param("content") String content
+            @Param("content") String content,
+            @Param("version") int version
     );
 
     int deleteById(@Param("id") String id);

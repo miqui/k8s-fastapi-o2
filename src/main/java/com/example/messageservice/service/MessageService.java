@@ -8,6 +8,7 @@ import com.example.messageservice.model.Message;
 import jakarta.annotation.PostConstruct;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -55,7 +56,7 @@ public class MessageService {
         String sender = request.sender().trim();
 
         messageMapper.insert(id, title, content, sender, createdAt);
-        return new Message(id, title, content, sender, createdAt);
+        return new Message(id, title, content, sender, createdAt, 0);
     }
 
     @CacheEvict(value = "messages", key = "#id")
@@ -66,8 +67,17 @@ public class MessageService {
                 : existing.title();
         String updatedContent = request.content().trim();
 
-        messageMapper.update(id, updatedTitle, updatedContent);
-        return new Message(existing.id(), updatedTitle, updatedContent, existing.sender(), existing.createdAt());
+        // Guard against request.version() - what the caller actually read - not existing.version(),
+        // which was just re-read a line above and would always match (checking the row against
+        // itself proves nothing about whether the caller's own read was stale).
+        int rowsUpdated = messageMapper.update(id, updatedTitle, updatedContent, request.version());
+        if (rowsUpdated == 0) {
+            throw new OptimisticLockingFailureException(
+                    "Message with ID '" + id + "' has changed since version " + request.version()
+                            + " was read; refetch and retry.");
+        }
+        return new Message(existing.id(), updatedTitle, updatedContent, existing.sender(), existing.createdAt(),
+                request.version() + 1);
     }
 
     @CacheEvict(value = "messages", key = "#id")

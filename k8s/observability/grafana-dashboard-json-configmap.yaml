@@ -303,3 +303,243 @@ data:
         }
       ]
     }
+  jvm-gc.json: |
+    {
+      "title": "JVM & GC",
+      "uid": "jvm-gc",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        { "id": 100, "title": "Heap & Memory", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+        {
+          "id": 1,
+          "title": "Heap Used by Region",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "bytes" } },
+          "targets": [
+            {
+              "expr": "jvm_memory_used_bytes{area=\"heap\"}",
+              "legendFormat": "{{k8s_pod_name}} - {{id}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Non-Heap Memory (Metaspace / Code Cache)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "bytes" } },
+          "targets": [
+            {
+              "expr": "jvm_memory_used_bytes{area=\"nonheap\"}",
+              "legendFormat": "{{k8s_pod_name}} - {{id}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Container Memory vs 1024Mi Limit",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "JVM-GC.md target: stay below 85% of the pod's memory limit to avoid the cgroup OOM killer.",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 70 },
+                  { "color": "red", "value": 85 }
+                ]
+              },
+              "custom": { "thresholdsStyle": { "mode": "line" } }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"default\",container=\"message-service\"}) by (pod) / sum(kube_pod_container_resource_limits{namespace=\"default\",container=\"message-service\",resource=\"memory\"}) by (pod) * 100",
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Heap Usage vs Max (MaxRAMPercentage headroom)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "JVM-GC.md recommends MaxRAMPercentage 70-75%, leaving headroom for Metaspace/threads/native memory.",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 75 },
+                  { "color": "red", "value": 90 }
+                ]
+              },
+              "custom": { "thresholdsStyle": { "mode": "line" } }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(jvm_memory_used_bytes{area=\"heap\"}) by (k8s_pod_name) / sum(jvm_memory_max_bytes{area=\"heap\"}) by (k8s_pod_name) * 100",
+              "legendFormat": "{{k8s_pod_name}}",
+              "refId": "A"
+            }
+          ]
+        },
+        { "id": 101, "title": "Garbage Collection", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 } },
+        {
+          "id": 5,
+          "title": "GC Pause Time (avg / max)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "JVM-GC.md target: MaxGCPauseMillis=100 - max pause should stay near/below this line.",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 100 }
+                ]
+              },
+              "custom": { "thresholdsStyle": { "mode": "line" } }
+            }
+          },
+          "targets": [
+            {
+              "expr": "jvm_gc_pause_max_milliseconds",
+              "legendFormat": "{{k8s_pod_name}} max",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(jvm_gc_pause_milliseconds_sum[1m])) by (k8s_pod_name) / sum(rate(jvm_gc_pause_milliseconds_count[1m])) by (k8s_pod_name)",
+              "legendFormat": "{{k8s_pod_name}} avg",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "GC Frequency",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "cpm" } },
+          "targets": [
+            {
+              "expr": "sum(rate(jvm_gc_pause_milliseconds_count[1m])) by (k8s_pod_name, action) * 60",
+              "legendFormat": "{{k8s_pod_name}} - {{action}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "title": "Allocation Rate",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "description": "JVM-GC.md 3.2: UseStringDeduplication targets reducing this in JSON/MyBatis-heavy workloads.",
+          "fieldConfig": { "defaults": { "unit": "Bps" } },
+          "targets": [
+            {
+              "expr": "sum(rate(jvm_gc_memory_allocated_bytes_total[1m])) by (k8s_pod_name)",
+              "legendFormat": "{{k8s_pod_name}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "title": "Promotion Rate (Young -> Old)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "Bps" } },
+          "targets": [
+            {
+              "expr": "sum(rate(jvm_gc_memory_promoted_bytes_total[1m])) by (k8s_pod_name)",
+              "legendFormat": "{{k8s_pod_name}}",
+              "refId": "A"
+            }
+          ]
+        },
+        { "id": 102, "title": "Threads & Classes", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 } },
+        {
+          "id": 9,
+          "title": "Thread States",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "jvm_threads_states",
+              "legendFormat": "{{k8s_pod_name}} - {{state}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "title": "Live / Daemon / Peak Threads",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "jvm_threads_live", "legendFormat": "{{k8s_pod_name}} live", "refId": "A" },
+            { "expr": "jvm_threads_daemon", "legendFormat": "{{k8s_pod_name}} daemon", "refId": "B" },
+            { "expr": "jvm_threads_peak", "legendFormat": "{{k8s_pod_name}} peak", "refId": "C" }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "Classes Loaded",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "jvm_classes_loaded",
+              "legendFormat": "{{k8s_pod_name}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "Process CPU Usage",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+          "targets": [
+            {
+              "expr": "process_cpu_usage",
+              "legendFormat": "{{k8s_pod_name}}",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    }

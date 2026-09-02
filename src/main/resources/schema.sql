@@ -5,3 +5,7 @@ CREATE TABLE IF NOT EXISTS messages (
     sender VARCHAR(50) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
 );
+
+-- Added for optimistic locking (see MessageService.updateMessage); this runs on every startup
+-- via spring.sql.init.mode=always, so it must stay idempotent for tables that predate this column.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;

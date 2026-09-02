@@ -44,10 +44,12 @@ export default function () {
     'read: id matches': (r) => r.json('id') === id,
   });
 
-  // Update
+  // Update - version 0 matches the just-created message (see Message.version() /
+  // UpdateMessageRequest.version(): the server rejects a stale version with 409).
   const updatePayload = JSON.stringify({
     title: 'Updated by k6-message-lifecycle.js',
     content: 'Updated content',
+    version: 0,
   });
   const updateRes = http.put(`${BASE_URL}/${id}`, updatePayload, {
     headers: jsonHeaders,

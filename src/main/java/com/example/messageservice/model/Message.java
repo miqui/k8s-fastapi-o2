@@ -9,5 +9,6 @@ public record Message(
     String title,
     String content,
     String sender,
-    Instant createdAt
+    Instant createdAt,
+    int version
 ) implements Serializable {}

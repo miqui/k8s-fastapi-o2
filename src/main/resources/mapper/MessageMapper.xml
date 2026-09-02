@@ -9,17 +9,18 @@
             <arg column="content" javaType="string"/>
             <arg column="sender" javaType="string"/>
             <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="version" javaType="_int"/>
         </constructor>
     </resultMap>
 
     <select id="findAll" resultMap="messageResultMap">
-        SELECT id, title, content, sender, created_at
+        SELECT id, title, content, sender, created_at, version
         FROM messages
         ORDER BY created_at
     </select>
 
     <select id="findById" resultMap="messageResultMap">
-        SELECT id, title, content, sender, created_at
+        SELECT id, title, content, sender, created_at, version
         FROM messages
         WHERE id = #{id}
     </select>
@@ -29,10 +30,13 @@
         VALUES (#{id}, #{title}, #{content}, #{sender}, #{createdAt})
     </insert>
 
+    <!-- Optimistic locking: only applies the write if version still matches what the caller
+         read. 0 affected rows means someone else updated the row in between - MessageService
+         treats that as a conflict instead of silently overwriting their change (lost update). -->
     <update id="update">
         UPDATE messages
-        SET title = #{title}, content = #{content}
-        WHERE id = #{id}
+        SET title = #{title}, content = #{content}, version = version + 1
+        WHERE id = #{id} AND version = #{version}
     </update>
 
     <delete id="deleteById">

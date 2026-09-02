@@ -57,6 +57,11 @@ spec:
                 name: message-service-config
             - secretRef:
                 name: postgres-credentials
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           resources:
             requests:
               cpu: "250m"
