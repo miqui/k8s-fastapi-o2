@@ -26,6 +26,16 @@ data:
         static_configs:
           - targets: ['postgres.default.svc.cluster.local:9187']
 
+      # jmx_prometheus_javaagent attached to the Hazelcast member's own JVM (see
+      # k8s/hazelcast-deployment.yaml) - Management Center's own Prometheus exporter
+      # (hazelcast.mc.prometheusExporter.enabled, see
+      # https://docs.hazelcast.com/management-center/5.11/integrate/prometheus-monitoring) turned
+      # out to require a paid Enterprise license (confirmed live: 402 LICENSE_REQUIRED), so this
+      # scrapes the member directly instead - same underlying metrics, no license needed.
+      - job_name: 'hazelcast'
+        static_configs:
+          - targets: ['hazelcast.default.svc.cluster.local:9404']
+
       # node-exporter runs hostNetwork, so its pod IP == the node's IP; scraped directly
       - job_name: 'node-exporter'
         kubernetes_sd_configs:

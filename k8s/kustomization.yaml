@@ -6,6 +6,7 @@ resources:
   - configmap.yaml
   - postgres-statefulset.yaml
   - postgres-service.yaml
+  - hazelcast-jmx-exporter-configmap.yaml
   - hazelcast-deployment.yaml
   - hazelcast-service.yaml
   - deployment.yaml

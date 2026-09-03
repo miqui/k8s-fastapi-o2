@@ -246,7 +246,7 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
 `observability` namespace) and waits for it to roll out. Once deployed:
 
 - **Grafana**: `http://grafana.localhost/` — log in with `admin`/`admin` (same local-dev-only caveat
-  as `k8s/secret.yaml` applies to `k8s/observability/grafana-secret.yaml`) and open one of four
+  as `k8s/secret.yaml` applies to `k8s/observability/grafana-secret.yaml`) and open one of five
   pre-provisioned dashboards, all in `k8s/observability/grafana-dashboard-json-configmap.yaml` as plain
   PromQL against real, verified metric names - if you add new panels, check the exact metric names
   Prometheus actually stores first (they differ from the raw OTLP names — see below):
@@ -263,10 +263,14 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
   - **PostgreSQL Ops & Queries**: connections, transaction/tuple rates, buffer cache hit ratio,
     locks, checkpoints, and per-query call rate/latency - see
     [PostgreSQL Metrics (postgres_exporter)](#postgresql-metrics-postgres_exporter) below.
+  - **Hazelcast Cache**: cluster size, connected clients, cache hit ratio/operation rate/latency
+    for the `messages` map, member heap, GC time - see
+    [Hazelcast Metrics (JMX exporter)](#hazelcast-metrics-jmx-exporter) below.
 - **Prometheus** (not exposed via Ingress; use `kubectl port-forward -n observability svc/prometheus 9090:9090`
   if you want its own UI at `http://localhost:9090`): scrapes `otel-collector.observability.svc.cluster.local:8889`
-  (app metrics), `postgres.default.svc.cluster.local:9187` (postgres_exporter, cross-namespace - see
-  below), plus `kube-state-metrics` and every `node-exporter` pod, and every node's kubelet
+  (app metrics), `postgres.default.svc.cluster.local:9187` (postgres_exporter) and
+  `hazelcast.default.svc.cluster.local:9404` (Hazelcast's JMX exporter) cross-namespace - see below
+  for both - plus `kube-state-metrics` and every `node-exporter` pod, and every node's kubelet
   cAdvisor endpoint via the API server proxy (see `k8s/observability/prometheus-configmap.yaml` and
   `prometheus-rbac.yaml`) for the cluster-ops dashboard.
 - **OTel Collector** (`k8s/observability/otel-collector-configmap.yaml`): receives OTLP metrics on
@@ -324,6 +328,45 @@ StatefulSet needs `kubectl apply -k k8s/` (it's part of the main Kustomization, 
 Prometheus config changes need a `kubectl rollout restart deployment/prometheus -n observability`
 too - it has no `--web.enable-lifecycle` reload endpoint wired up, so it only reads
 `prometheus.yml` at startup.
+
+### Hazelcast Metrics (JMX exporter)
+
+Hazelcast's own [Management Center has a built-in Prometheus exporter](https://docs.hazelcast.com/management-center/5.11/integrate/prometheus-monitoring)
+(`hazelcast.mc.prometheusExporter.enabled`), but it turned out to be an **Enterprise-licensed
+feature** - confirmed live by deploying Management Center and getting `402 LICENSE_REQUIRED` from
+its `/metrics` endpoint, not just by reading the docs. Rather than requiring a paid license for a
+local dev cluster, `k8s/hazelcast-deployment.yaml` instead attaches
+[`jmx_prometheus_javaagent`](https://github.com/prometheus/jmx_exporter) directly to the Hazelcast
+member's own JVM - a free, open-source, in-process javaagent (no separate Hazelcast license, no
+remote JMX/RMI port needed) that reads the member's JMX MBeans and re-exposes them as Prometheus
+text format on its own port.
+
+- An `initContainer` (`curlimages/curl`) downloads the agent jar into a volume shared with the
+  `hazelcast` container on every pod start, rather than baking it into a custom Hazelcast image.
+- The `hazelcast` container's `JAVA_OPTS` sets `-Dhazelcast.metrics.jmx.enabled=true` (registers
+  Hazelcast's cluster/map/operation stats as `com.hazelcast:*` JMX MBeans - off by default) and
+  `-javaagent:...=9404:/etc/jmx-exporter/config.yaml` (port `9404` is the agent's own listener,
+  unrelated to Hazelcast's member port `5701`). The agent's config
+  (`k8s/hazelcast-jmx-exporter-configmap.yaml`) just whitelists `com.hazelcast:*` and uses the
+  exporter's default attribute-derived naming rather than hand-written per-metric rules.
+- `k8s/hazelcast-service.yaml` exposes port `9404` alongside `5701`, and Prometheus scrapes it
+  cross-namespace via `hazelcast.default.svc.cluster.local:9404`.
+
+**Verified metric names** (checked live via port-forward before writing dashboard panels - the
+exporter's default naming isn't documented anywhere, and Hazelcast's own MBean layout isn't
+guaranteed stable across versions): `com_hazelcast_metrics_<attribute>`, labeled by `prefix` (the
+metric's category - `cluster`, `map`, `memory`, `gc`, `tcp.connection`, `client.endpoint`, etc.) and
+`tag0` for per-instance metrics (e.g. a map name). Per-map metrics come back with `tag0` set to the
+*literal string* `"name=messages"` **including the embedded quote characters** (an artifact of how
+Hazelcast quotes JMX ObjectName tags, which the exporter just passes through) - matching that
+exactly requires escaping those quotes twice over (once for PromQL, once for JSON), so every panel
+here uses a `tag0=~".*name=messages.*"` regex substring match instead, which sidesteps the
+escaping entirely. Key metrics used: `com_hazelcast_metrics_size{prefix="cluster"}` (member count),
+`com_hazelcast_metrics_count{prefix="client.endpoint"}` (connected clients - matches
+`message-service`'s pod count, since each pod is a Hazelcast client), `hits`/`getcount`/`putcount`/
+`removecount`/`totalgetlatency`/`totalputlatency`/`ownedentrycount`/`ownedentrymemorycost`/
+`evictioncount`/`expirationcount` (all `prefix="map"`, per-map via `tag0`), and
+`usedheap`/`committedheap`/`maxheap` (`prefix="memory"`).
 
 ---
 

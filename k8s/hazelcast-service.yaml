@@ -12,3 +12,6 @@ spec:
     - port: 5701
       targetPort: 5701
       name: hazelcast
+    - port: 9404
+      targetPort: 9404
+      name: metrics
