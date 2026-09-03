@@ -46,6 +46,13 @@ nodes:
         kind: JoinConfiguration
         nodeRegistration:
           kubeletExtraArgs:
+            node-labels: "workload=api"
+  - role: worker
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
             node-labels: "workload=db"
   - role: worker
     kubeadmConfigPatches:
