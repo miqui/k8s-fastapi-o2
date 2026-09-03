@@ -246,10 +246,13 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
 `observability` namespace) and waits for it to roll out. Once deployed:
 
 - **Grafana**: `http://grafana.localhost/` — log in with `admin`/`admin` (same local-dev-only caveat
-  as `k8s/secret.yaml` applies to `k8s/observability/grafana-secret.yaml`) and open one of five
+  as `k8s/secret.yaml` applies to `k8s/observability/grafana-secret.yaml`) and open one of six
   pre-provisioned dashboards, all in `k8s/observability/grafana-dashboard-json-configmap.yaml` as plain
   PromQL against real, verified metric names - if you add new panels, check the exact metric names
   Prometheus actually stores first (they differ from the raw OTLP names — see below):
+  - **API RED & Saturation**: the caller's-eye view of `message-service` - request rate/latency
+    percentiles/errors by route, DB connection-pool saturation, CPU throttling, memory vs. limit,
+    restarts/readiness - see [API RED & Saturation Dashboard](#api-red--saturation-dashboard) below.
   - **message-service**: app-level request rate/latency, JVM heap, GC pauses, HikariCP connections,
     CPU, thread count.
   - **kind cluster ops**: cluster-wide node/pod health - nodes ready, pod phases/restarts, per-node
@@ -367,6 +370,44 @@ escaping entirely. Key metrics used: `com_hazelcast_metrics_size{prefix="cluster
 `removecount`/`totalgetlatency`/`totalputlatency`/`ownedentrycount`/`ownedentrymemorycost`/
 `evictioncount`/`expirationcount` (all `prefix="map"`, per-map via `tag0`), and
 `usedheap`/`committedheap`/`maxheap` (`prefix="memory"`).
+
+### API RED & Saturation Dashboard
+
+`api-red.json`'s panels follow the standard [RED method](https://grafana.com/blog/2018/08/02/the-red-method-how-to-instrument-your-services/)
+(**R**ate, **E**rrors, **D**uration) plus enough saturation signal to explain *why* rate/errors/
+duration are moving, scoped to `message-service` and its direct dependencies:
+
+- **Rate**: request rate (RPS) overall and broken down by `method`+`uri` (Spring's `uri` tag is
+  already the matched route template, e.g. `/api/messages/{id}`, never a raw path with a real id
+  in it - no extra normalization needed).
+- **Duration**: p50/p90/p95/p99 latency (overall and per-route), plus in-flight request count.
+- **Errors**: 5xx ratio (gauge, thresholds at 1%/5%), request rate by `outcome`
+  (`SUCCESS`/`CLIENT_ERROR`/`SERVER_ERROR`), and 5xx rate per route.
+- **Saturation**: HikariCP pool utilization (active/idle/pending vs. max) and p95 connection-acquire
+  wait, CPU throttling ratio, container memory vs. its limit, and pod restarts/readiness.
+
+All panels exclude `/actuator/health/**` traffic (`uri!~"/actuator.*"`) - the goal is the *caller's*
+view of the API, and probe traffic isn't a caller.
+
+**The `_bucket` metrics existed but were useless until a real config fix.** Before this dashboard,
+`http_server_requests_milliseconds_bucket` and `hikaricp_connections_acquire_milliseconds_bucket`
+already existed in Prometheus - but every request landed in a single `+Inf` bucket (no finite `le`
+values at all), so `histogram_quantile()` against them always returned `NaN`. Micrometer doesn't
+record real percentile-histogram buckets for a Timer unless told to - `application.properties` now
+sets `management.metrics.distribution.percentiles-histogram.http.server.requests=true` and the same
+for `hikaricp.connections.acquire`, which is what actually produces the ~70 exponential `le`
+buckets these panels query. This is a real, verified-live fix (checked bucket population, not just
+config presence, both before and after), not just dashboard wiring - a dashboard querying a
+histogram with no real buckets would have looked fine at a glance and silently shown `NaN`/empty
+percentile panels forever.
+
+**Deliberately not implemented, so not claimed as covered by this dashboard**: `429`/timeout/retry
+rates (the app has no rate limiting or explicit downstream timeouts to measure), business-outcome
+errors (HTTP `200` with a failed domain result - out of scope per this dashboard's own design goal;
+this API's success predicate is just the HTTP status), deployment markers, and trace exemplars (no
+distributed tracing is wired up in this stack - only metrics). Downstream dependency RED for
+Postgres and Hazelcast already exist as their own dashboards (linked above) rather than being
+duplicated here.
 
 ---
 
