@@ -562,3 +562,19 @@ into the same `400` problem-details shape as every other bad-request case:
 curl -i "http://localhost/api/messages?limmit=2&offsett=4"
 # 400 - {"detail":"Unknown query parameter(s): limmit, offsett. Supported parameters are: limit, offset.", ...}
 ```
+
+## API Documentation (OpenAPI)
+
+`springdoc-openapi-starter-webmvc-ui` generates the OpenAPI document directly from the existing
+controller and Bean Validation annotations - no separate spec file to keep in sync by hand.
+
+- Raw spec: `GET /v3/api-docs` (JSON) or `/v3/api-docs.yaml`
+- Interactive UI: `http://localhost/swagger-ui/index.html`
+
+**Why 3.1, not 3.2.** OpenAPI 3.2.0 exists and Swagger's *viewer/editor* tooling (Swagger UI,
+Swagger Editor, Swagger Client) added support for it - but as of this writing, `swagger-core` (the
+Java annotation-processing library `springdoc-openapi` itself depends on to actually generate a
+spec from code) hasn't shipped 3.2 support yet. Declaring `openapi: 3.2.0` while emitting a
+3.1-shaped document would be a lie a consuming tool could act on incorrectly, so this generates an
+honestly-labeled `3.1.0` document instead. Bump `springdoc-openapi.version` in `pom.xml` once a
+release adds real 3.2 generation support.
