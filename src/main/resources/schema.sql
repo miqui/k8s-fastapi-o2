@@ -13,3 +13,9 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0
 -- Matches findAll's ORDER BY (see MessageMapper.xml); without it, the paginated LIMIT/OFFSET
 -- query still has to sort the whole table on every page, which defeats the point of paging.
 CREATE INDEX IF NOT EXISTS idx_messages_created_at_id ON messages (created_at, id);
+
+-- Backs postgres_exporter's --collector.stat_statements (see k8s/postgres-statefulset.yaml and
+-- the "PostgreSQL Ops & Queries" Grafana dashboard). Requires pg_stat_statements to already be in
+-- shared_preload_libraries (set via the postgres container's startup args, not by this statement)
+-- - CREATE EXTENSION alone can't retroactively preload a library into an already-running server.
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;

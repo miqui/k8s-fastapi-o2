@@ -543,3 +543,192 @@ data:
         }
       ]
     }
+  postgres-ops.json: |
+    {
+      "title": "PostgreSQL Ops & Queries",
+      "uid": "postgres-ops",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "PostgreSQL Up",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "pg_up", "refId": "A" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+              ]
+            }
+          }
+        },
+        {
+          "id": 2,
+          "title": "Active Connections",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(pg_stat_activity_count)", "refId": "A" }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Buffer Cache Hit Ratio",
+          "type": "gauge",
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "percentunit", "min": 0, "max": 1 }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(pg_stat_database_blks_hit[5m])) / (sum(rate(pg_stat_database_blks_hit[5m])) + sum(rate(pg_stat_database_blks_read[5m])))",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Deadlocks (1h)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(increase(pg_stat_database_deadlocks[1h]))", "refId": "A" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 1 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 5,
+          "title": "Transaction Rate (commit vs rollback)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops" } },
+          "targets": [
+            { "expr": "sum(rate(pg_stat_database_xact_commit[5m])) by (datname)", "legendFormat": "commit {{datname}}", "refId": "A" },
+            { "expr": "sum(rate(pg_stat_database_xact_rollback[5m])) by (datname)", "legendFormat": "rollback {{datname}}", "refId": "B" }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Tuple Write Rate",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops" } },
+          "targets": [
+            { "expr": "sum(rate(pg_stat_database_tup_inserted[5m])) by (datname)", "legendFormat": "inserted {{datname}}", "refId": "A" },
+            { "expr": "sum(rate(pg_stat_database_tup_updated[5m])) by (datname)", "legendFormat": "updated {{datname}}", "refId": "B" },
+            { "expr": "sum(rate(pg_stat_database_tup_deleted[5m])) by (datname)", "legendFormat": "deleted {{datname}}", "refId": "C" }
+          ]
+        },
+        {
+          "id": 7,
+          "title": "Buffer Cache I/O Rate (hit vs disk read)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops" } },
+          "targets": [
+            { "expr": "sum(rate(pg_stat_database_blks_hit[5m])) by (datname)", "legendFormat": "hit {{datname}}", "refId": "A" },
+            { "expr": "sum(rate(pg_stat_database_blks_read[5m])) by (datname)", "legendFormat": "disk read {{datname}}", "refId": "B" }
+          ]
+        },
+        {
+          "id": 8,
+          "title": "Locks by Mode",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(pg_locks_count) by (mode)", "legendFormat": "{{mode}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 9,
+          "title": "Connections by State",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(pg_stat_activity_count) by (state)", "legendFormat": "{{state}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 10,
+          "title": "Checkpoint Rate (scheduled vs requested)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops" } },
+          "targets": [
+            { "expr": "rate(pg_stat_bgwriter_checkpoints_timed_total[5m])", "legendFormat": "scheduled", "refId": "A" },
+            { "expr": "rate(pg_stat_bgwriter_checkpoints_req_total[5m])", "legendFormat": "requested", "refId": "B" }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "Top Queries by Execution Rate",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops" } },
+          "targets": [
+            {
+              "expr": "topk(10, sum(rate(pg_stat_statements_calls_total[5m])) by (queryid, datname))",
+              "legendFormat": "{{queryid}} ({{datname}})",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "Top Queries by Mean Latency",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "topk(10, sum(rate(pg_stat_statements_seconds_total[5m])) by (queryid) / sum(rate(pg_stat_statements_calls_total[5m])) by (queryid))",
+              "legendFormat": "{{queryid}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "title": "Query ID -> SQL Text",
+          "type": "table",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 36 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "pg_stat_statements_query_id",
+              "format": "table",
+              "instant": true,
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    }

@@ -19,6 +19,13 @@ data:
         static_configs:
           - targets: ['kube-state-metrics.observability.svc.cluster.local:8080']
 
+      # postgres runs in the default namespace (see k8s/postgres-statefulset.yaml), not
+      # observability; postgres-exporter is a sidecar in that same pod, reached via the postgres
+      # headless Service's "metrics" port.
+      - job_name: 'postgres-exporter'
+        static_configs:
+          - targets: ['postgres.default.svc.cluster.local:9187']
+
       # node-exporter runs hostNetwork, so its pod IP == the node's IP; scraped directly
       - job_name: 'node-exporter'
         kubernetes_sd_configs:

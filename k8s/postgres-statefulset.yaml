@@ -20,6 +20,15 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
+          # shared_preload_libraries must be set at server start (can't be done via a plain SQL
+          # statement); schema.sql's CREATE EXTENSION IF NOT EXISTS pg_stat_statements then just
+          # attaches to this already-preloaded library. pg_stat_statements.track=all also counts
+          # statements executed inside functions, not only top-level ones.
+          args:
+            - "-c"
+            - "shared_preload_libraries=pg_stat_statements"
+            - "-c"
+            - "pg_stat_statements.track=all"
           ports:
             - containerPort: 5432
               name: postgres
@@ -61,6 +70,50 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 2
+        # Sidecar (shares the pod's network namespace, so it reaches Postgres via localhost)
+        # exporting pg_stat_database/pg_locks/pg_stat_bgwriter/pg_stat_activity/pg_stat_statements
+        # as Prometheus metrics - see https://github.com/prometheus-community/postgres_exporter
+        # and the "PostgreSQL Ops & Queries" Grafana dashboard that reads them.
+        - name: postgres-exporter
+          image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+          args:
+            - "--collector.stat_statements"
+            - "--collector.stat_statements.include_query"
+          env:
+            - name: DATA_SOURCE_URI
+              value: "localhost:5432/messagedb?sslmode=disable"
+            - name: DATA_SOURCE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: DB_USER
+            - name: DATA_SOURCE_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: DB_PASSWORD
+          ports:
+            - containerPort: 9187
+              name: metrics
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 9187
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 9187
+            initialDelaySeconds: 10
+            periodSeconds: 15
   volumeClaimTemplates:
     - metadata:
         name: postgres-data

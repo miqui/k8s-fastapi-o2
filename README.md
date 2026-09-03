@@ -246,7 +246,7 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
 `observability` namespace) and waits for it to roll out. Once deployed:
 
 - **Grafana**: `http://grafana.localhost/` — log in with `admin`/`admin` (same local-dev-only caveat
-  as `k8s/secret.yaml` applies to `k8s/observability/grafana-secret.yaml`) and open one of three
+  as `k8s/secret.yaml` applies to `k8s/observability/grafana-secret.yaml`) and open one of four
   pre-provisioned dashboards, all in `k8s/observability/grafana-dashboard-json-configmap.yaml` as plain
   PromQL against real, verified metric names - if you add new panels, check the exact metric names
   Prometheus actually stores first (they differ from the raw OTLP names — see below):
@@ -260,9 +260,13 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
     100ms max GC pause, 70-75% heap headroom) so you can see at a glance whether tuning changes are
     landing. Broken down **per pod** (`k8s_pod_name` label) rather than merged across replicas - see
     the two fixes below, both required for that to work at all.
+  - **PostgreSQL Ops & Queries**: connections, transaction/tuple rates, buffer cache hit ratio,
+    locks, checkpoints, and per-query call rate/latency - see
+    [PostgreSQL Metrics (postgres_exporter)](#postgresql-metrics-postgres_exporter) below.
 - **Prometheus** (not exposed via Ingress; use `kubectl port-forward -n observability svc/prometheus 9090:9090`
   if you want its own UI at `http://localhost:9090`): scrapes `otel-collector.observability.svc.cluster.local:8889`
-  (app metrics), plus `kube-state-metrics` and every `node-exporter` pod, and every node's kubelet
+  (app metrics), `postgres.default.svc.cluster.local:9187` (postgres_exporter, cross-namespace - see
+  below), plus `kube-state-metrics` and every `node-exporter` pod, and every node's kubelet
   cAdvisor endpoint via the API server proxy (see `k8s/observability/prometheus-configmap.yaml` and
   `prometheus-rbac.yaml`) for the cluster-ops dashboard.
 - **OTel Collector** (`k8s/observability/otel-collector-configmap.yaml`): receives OTLP metrics on
@@ -284,6 +288,42 @@ sanitizes them into Prometheus-safe names with unit suffixes (`http_server_reque
 Prometheus here has no `PersistentVolumeClaim` — its data is ephemeral and resets whenever its pod
 restarts. That's fine for a local metrics-exploration setup; add a PVC to `prometheus-deployment.yaml`
 (or switch to a `StatefulSet` like `postgres`) if you want it to survive restarts.
+
+### PostgreSQL Metrics (postgres_exporter)
+
+[`postgres_exporter`](https://github.com/prometheus-community/postgres_exporter) runs as a sidecar
+in the `postgres-0` pod (see `k8s/postgres-statefulset.yaml`) - it shares the pod's network
+namespace, so it reaches Postgres over `localhost:5432` using the same `postgres-credentials`
+Secret the app already uses. `k8s/postgres-service.yaml` exposes it on a `metrics` port (`9187`)
+alongside Postgres' own `5432`, and Prometheus (running in the separate `observability` namespace)
+scrapes it cross-namespace via `postgres.default.svc.cluster.local:9187`.
+
+**Ops metrics** come from postgres_exporter's built-in collectors, enabled by default: connection
+counts and per-state breakdown (`pg_stat_activity_count`), transaction/tuple rates and cache hit
+ratio (`pg_stat_database_*`), lock counts by mode (`pg_locks_count`), and checkpoint/buffer activity
+(`pg_stat_bgwriter_*`) - note the `stat_` infix; there is no bare `pg_bgwriter_*` metric.
+
+**Query metrics** need the `pg_stat_statements` extension, which isn't in Postgres by default:
+
+1. The `postgres` container's startup args add `shared_preload_libraries=pg_stat_statements` (must
+   happen at server start, not via SQL) and `pg_stat_statements.track=all` (also count statements
+   run inside functions).
+2. `schema.sql`'s `CREATE EXTENSION IF NOT EXISTS pg_stat_statements` then attaches to that already
+   -preloaded library on every app startup.
+3. The exporter's `--collector.stat_statements` flag (plus `--collector.stat_statements.include_query`
+   for a `queryid` -> SQL-text mapping) exposes per-`queryid` call count, total time, and rows via
+   `pg_stat_statements_calls_total` / `_seconds_total` / `_rows_total` - the numeric metrics are
+   labeled by `queryid`/`user`/`datname` only (not the SQL text itself, to keep cardinality sane);
+   `pg_stat_statements_query_id` is the separate `queryid` -> `query` lookup table, capped at the
+   top 20 statements and 1024 characters each by the exporter's own defaults.
+
+If you change the postgres container's startup args or the `postgres-exporter` sidecar, the
+StatefulSet needs `kubectl apply -k k8s/` (it's part of the main Kustomization, not
+`k8s/observability/`); a schema.sql change needs the app image rebuilt and redeployed (see
+"Pushing a Java code change to the running cluster" above) since it's packaged into the JAR.
+Prometheus config changes need a `kubectl rollout restart deployment/prometheus -n observability`
+too - it has no `--web.enable-lifecycle` reload endpoint wired up, so it only reads
+`prometheus.yml` at startup.
 
 ---
 
