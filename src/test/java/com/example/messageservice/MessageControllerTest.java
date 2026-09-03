@@ -73,6 +73,37 @@ class MessageControllerTest {
     }
 
     @Test
+    void shouldReturn400WhenBothPaginationParamsAreMisspelled() throws Exception {
+        // "limmit"/"offsett" aren't bound to anything, so without the unknown-param check
+        // getAllMessages() would silently fall back to limit=50/offset=0 and return 200.
+        mockMvc.perform(get("/api/messages").param("limmit", "2").param("offsett", "4"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("Content-Type", containsString("application/problem+json")))
+                .andExpect(jsonPath("$.type", is("https://example.com/problems/bad-request")))
+                .andExpect(jsonPath("$.title", is("Bad Request")))
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.detail", containsString("limmit")))
+                .andExpect(jsonPath("$.detail", containsString("offsett")));
+    }
+
+    @Test
+    void shouldReturn400WhenOneValidAndOneMisspelledPaginationParamAreMixed() throws Exception {
+        mockMvc.perform(get("/api/messages").param("limit", "5").param("offsett", "4"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("Content-Type", containsString("application/problem+json")))
+                .andExpect(jsonPath("$.type", is("https://example.com/problems/bad-request")))
+                .andExpect(jsonPath("$.detail", containsString("offsett")));
+    }
+
+    @Test
+    void shouldReturn400WhenAnUnknownExtraQueryParamIsPresent() throws Exception {
+        mockMvc.perform(get("/api/messages").param("limit", "5").param("sort", "desc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("Content-Type", containsString("application/problem+json")))
+                .andExpect(jsonPath("$.detail", containsString("sort")));
+    }
+
+    @Test
     void shouldCreateMessageSuccessfully() throws Exception {
         CreateMessageRequest request = new CreateMessageRequest("Hello K8s", "Testing message in kind cluster", "alice");
 

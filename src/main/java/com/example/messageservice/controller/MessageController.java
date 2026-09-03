@@ -5,6 +5,7 @@ import com.example.messageservice.dto.PagedResult;
 import com.example.messageservice.dto.UpdateMessageRequest;
 import com.example.messageservice.model.Message;
 import com.example.messageservice.service.MessageService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -23,12 +24,16 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.net.URI;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 @Validated
 @RestController
 @RequestMapping("/api/messages")
 public class MessageController {
+
+    private static final Set<String> ALLOWED_MESSAGES_QUERY_PARAMS = Set.of("limit", "offset");
 
     private final MessageService messageService;
 
@@ -44,7 +49,20 @@ public class MessageController {
             int limit,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "offset must not be negative")
-            int offset) {
+            int offset,
+            HttpServletRequest request) {
+        // @RequestParam's defaultValue silently falls back to it for any name Spring doesn't
+        // recognize, so a typo'd param (e.g. "limmit") would otherwise be dropped and answered
+        // with the default page instead of an error. Reject anything outside limit/offset instead.
+        List<String> unknownParams = Collections.list(request.getParameterNames()).stream()
+                .filter(name -> !ALLOWED_MESSAGES_QUERY_PARAMS.contains(name))
+                .toList();
+        if (!unknownParams.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Unknown query parameter(s): " + String.join(", ", unknownParams)
+                            + ". Supported parameters are: limit, offset.");
+        }
+
         PagedResult<Message> page = messageService.getAllMessages(limit, offset);
         return ResponseEntity.ok()
                 .header("X-Total-Count", String.valueOf(page.totalCount()))

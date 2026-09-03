@@ -549,3 +549,16 @@ matching index, `idx_messages_created_at_id` (see `schema.sql`), keeps that sort
 scanning the whole table on every request; dropping it turns pagination into a full-table sort per
 page, which on a million-plus-row table is the difference between double-digit-millisecond and
 multi-second responses.
+
+**Unknown query parameters are rejected, not ignored.** `@RequestParam`'s `defaultValue` means
+Spring silently falls back to the default for any parameter name it doesn't recognize - so a typo
+like `?limmit=2&offsett=4` would otherwise be bound to nothing, quietly answered with the default
+`limit=50&offset=0` page, and returned as a *successful* `200` instead of surfacing the mistake.
+`MessageController#getAllMessages` checks the raw request's parameter names against an
+allow-list (`limit`, `offset`) and throws for anything else, which `GlobalExceptionHandler` turns
+into the same `400` problem-details shape as every other bad-request case:
+
+```bash
+curl -i "http://localhost/api/messages?limmit=2&offsett=4"
+# 400 - {"detail":"Unknown query parameter(s): limmit, offsett. Supported parameters are: limit, offset.", ...}
+```
