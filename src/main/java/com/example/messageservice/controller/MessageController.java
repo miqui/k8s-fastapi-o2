@@ -1,10 +1,13 @@
 package com.example.messageservice.controller;
 
 import com.example.messageservice.dto.CreateMessageRequest;
+import com.example.messageservice.dto.PagedResult;
 import com.example.messageservice.dto.UpdateMessageRequest;
 import com.example.messageservice.model.Message;
 import com.example.messageservice.service.MessageService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
@@ -15,6 +18,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
@@ -33,8 +37,18 @@ public class MessageController {
     }
 
     @GetMapping
-    public ResponseEntity<List<Message>> getAllMessages() {
-        return ResponseEntity.ok(messageService.getAllMessages());
+    public ResponseEntity<List<Message>> getAllMessages(
+            @RequestParam(defaultValue = "50")
+            @Min(value = 1, message = "limit must be at least 1")
+            @Max(value = 200, message = "limit must not exceed 200")
+            int limit,
+            @RequestParam(defaultValue = "0")
+            @Min(value = 0, message = "offset must not be negative")
+            int offset) {
+        PagedResult<Message> page = messageService.getAllMessages(limit, offset);
+        return ResponseEntity.ok()
+                .header("X-Total-Count", String.valueOf(page.totalCount()))
+                .body(page.items());
     }
 
     @GetMapping("/{id}")

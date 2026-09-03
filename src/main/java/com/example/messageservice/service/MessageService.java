@@ -1,6 +1,7 @@
 package com.example.messageservice.service;
 
 import com.example.messageservice.dto.CreateMessageRequest;
+import com.example.messageservice.dto.PagedResult;
 import com.example.messageservice.dto.UpdateMessageRequest;
 import com.example.messageservice.exception.ResourceNotFoundException;
 import com.example.messageservice.mapper.MessageMapper;
@@ -38,8 +39,9 @@ public class MessageService {
         }
     }
 
-    public List<Message> getAllMessages() {
-        return messageMapper.findAll();
+    public PagedResult<Message> getAllMessages(int limit, int offset) {
+        List<Message> items = messageMapper.findAll(limit, offset);
+        return new PagedResult<>(items, messageMapper.count());
     }
 
     @Cacheable(value = "messages", key = "#id")

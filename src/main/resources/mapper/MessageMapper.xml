@@ -13,10 +13,13 @@
         </constructor>
     </resultMap>
 
+    <!-- id is a secondary sort key so paging stays stable across requests even when two rows
+         share the same created_at (millisecond ties can otherwise reorder a row across pages). -->
     <select id="findAll" resultMap="messageResultMap">
         SELECT id, title, content, sender, created_at, version
         FROM messages
-        ORDER BY created_at
+        ORDER BY created_at, id
+        LIMIT #{limit} OFFSET #{offset}
     </select>
 
     <select id="findById" resultMap="messageResultMap">

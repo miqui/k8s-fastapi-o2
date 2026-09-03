@@ -6,3 +6,5 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     version INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS idx_messages_created_at_id ON messages (created_at, id);

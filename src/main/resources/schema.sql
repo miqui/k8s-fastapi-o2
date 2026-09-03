@@ -9,3 +9,7 @@ CREATE TABLE IF NOT EXISTS messages (
 -- Added for optimistic locking (see MessageService.updateMessage); this runs on every startup
 -- via spring.sql.init.mode=always, so it must stay idempotent for tables that predate this column.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
+
+-- Matches findAll's ORDER BY (see MessageMapper.xml); without it, the paginated LIMIT/OFFSET
+-- query still has to sort the whole table on every page, which defeats the point of paging.
+CREATE INDEX IF NOT EXISTS idx_messages_created_at_id ON messages (created_at, id);

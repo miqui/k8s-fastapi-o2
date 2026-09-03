@@ -390,7 +390,7 @@ below work with any of them - just swap the filename.
 
 | Script | What it exercises |
 | :--- | :--- |
-| `k6-retrieve-messages.js` | `GET /api/messages` (read path). |
+| `k6-retrieve-messages.js` | `GET /api/messages` (read path), including a paginated `?limit=&offset=` request - see [Pagination](#pagination). |
 | `k6-create-messages.js` | `POST /api/messages` (write path). |
 | `k6-message-lifecycle.js` | Full CRUD per iteration: create -> get by id -> update -> delete. |
 | `k6-invalid-requests.js` | Negative paths: invalid create (400), missing id (404), blank id (400) - all RFC 9457 problem-details responses. |
@@ -517,3 +517,35 @@ kubectl exec -i postgres-0 -- psql -U message_app -d messagedb \
 **Note:** because `PUT` now requires `version`, `k6-message-lifecycle.js`'s update step sends
 `version: 0` (correct immediately after its own `create` step, since a freshly created message
 always starts at version 0).
+
+## Pagination
+
+`GET /api/messages` used to return the entire `messages` table in one response - fine with a
+handful of demo rows, but unbounded against a table that's had any real traffic (the local kind
+cluster's demo table has accumulated well over a million rows from repeated k6 runs). It now
+accepts two optional query parameters:
+
+| Parameter | Description | Default | Bounds |
+| :--- | :--- | :--- | :--- |
+| `limit` | Max number of messages to return | `50` | `1`-`200` |
+| `offset` | Number of messages to skip, ordered by `created_at, id` | `0` | `>= 0` |
+
+```bash
+curl "http://localhost/api/messages?limit=20&offset=40"
+```
+
+The response body is still a plain JSON array (existing clients that don't pass these parameters
+are unaffected apart from now getting at most 50 messages instead of everything). Alongside it, an
+`X-Total-Count` response header carries the *total* row count, independent of `limit`/`offset`, so
+a client can compute how many pages remain (`ceil(X-Total-Count / limit)`). Out-of-range values
+(`limit=0`, `limit=500`, `offset=-1`, etc.) are rejected with a `400` RFC 9457 problem-details body
+via the same `HandlerMethodValidationException` path as the id-blank check on `GET
+/api/messages/{id}`.
+
+`findAll`'s `ORDER BY created_at, id LIMIT ... OFFSET ...` (see `MessageMapper.xml`) needs `id` as
+a tiebreaker so paging stays stable even when two rows share the same millisecond-precision
+`created_at` - without it, ties could reorder across pages and either skip or repeat a row. A
+matching index, `idx_messages_created_at_id` (see `schema.sql`), keeps that sort itself from
+scanning the whole table on every request; dropping it turns pagination into a full-table sort per
+page, which on a million-plus-row table is the difference between double-digit-millisecond and
+multi-second responses.

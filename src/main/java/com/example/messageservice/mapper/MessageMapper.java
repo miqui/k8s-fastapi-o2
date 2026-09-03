@@ -11,7 +11,7 @@ import java.util.Optional;
 @Mapper
 public interface MessageMapper {
 
-    List<Message> findAll();
+    List<Message> findAll(@Param("limit") int limit, @Param("offset") int offset);
 
     Optional<Message> findById(@Param("id") String id);
 

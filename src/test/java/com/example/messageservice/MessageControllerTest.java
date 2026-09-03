@@ -36,7 +36,40 @@ class MessageControllerTest {
         mockMvc.perform(get("/api/messages"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(header().exists("X-Total-Count"))
                 .andExpect(jsonPath("$", not(empty())));
+    }
+
+    @Test
+    void shouldRespectLimitAndOffsetParameters() throws Exception {
+        messageService.createMessage(new CreateMessageRequest("Page 1", "First page item", "erin"));
+        messageService.createMessage(new CreateMessageRequest("Page 2", "Second page item", "erin"));
+
+        mockMvc.perform(get("/api/messages").param("limit", "1").param("offset", "0"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(header().exists("X-Total-Count"));
+    }
+
+    @Test
+    void shouldReturn400WhenLimitIsOutOfRange() throws Exception {
+        mockMvc.perform(get("/api/messages").param("limit", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("Content-Type", containsString("application/problem+json")))
+                .andExpect(jsonPath("$.status", is(400)));
+
+        mockMvc.perform(get("/api/messages").param("limit", "201"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("Content-Type", containsString("application/problem+json")))
+                .andExpect(jsonPath("$.status", is(400)));
+    }
+
+    @Test
+    void shouldReturn400WhenOffsetIsNegative() throws Exception {
+        mockMvc.perform(get("/api/messages").param("offset", "-1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("Content-Type", containsString("application/problem+json")))
+                .andExpect(jsonPath("$.status", is(400)));
     }
 
     @Test

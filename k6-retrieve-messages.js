@@ -34,6 +34,24 @@ export default function () {
         return false;
       }
     },
+    'has X-Total-Count header': (r) => !!r.headers['X-Total-Count'],
+  });
+
+  // Paginate with limit/offset (see MessageController#getAllMessages): limit is capped at 200
+  // server-side, so a small page should come back exactly that size (never more).
+  const pageRes = http.get(`${BASE_URL}?limit=5&offset=0`, {
+    headers: { 'Accept': 'application/json' },
+    tags: { name: 'GetMessagesPage' },
+  });
+  check(pageRes, {
+    'page: status is 200': (r) => r.status === 200,
+    'page: at most 5 items': (r) => {
+      try {
+        return r.json().length <= 5;
+      } catch (e) {
+        return false;
+      }
+    },
   });
 
   // Simulate think time between 100ms and 300ms using k6-utils
