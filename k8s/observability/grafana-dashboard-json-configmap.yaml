@@ -891,3 +891,216 @@ data:
         }
       ]
     }
+  api-red.json: |
+    {
+      "title": "API RED & Saturation",
+      "uid": "api-red",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Request Rate (RPS)",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            { "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\"}[5m]))", "refId": "A" }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "p99 Latency",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "5xx Error Ratio",
+          "type": "gauge",
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.01 },
+                  { "color": "red", "value": 0.05 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\",outcome=\"SERVER_ERROR\"}[5m])) / sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\"}[5m]))",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "In-Flight Requests",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(http_server_requests_active_milliseconds_count)", "refId": "A" }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Request Rate by Route & Method",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            {
+              "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\"}[5m])) by (method, uri)",
+              "legendFormat": "{{method}} {{uri}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Latency Percentiles",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms" } },
+          "targets": [
+            { "expr": "histogram_quantile(0.50, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
+            { "expr": "histogram_quantile(0.90, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))", "legendFormat": "p90", "refId": "B" },
+            { "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))", "legendFormat": "p95", "refId": "C" },
+            { "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))", "legendFormat": "p99", "refId": "D" }
+          ]
+        },
+        {
+          "id": 7,
+          "title": "Request Rate by Outcome",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            {
+              "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\"}[5m])) by (outcome)",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "title": "5xx Rate by Route",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            {
+              "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\",outcome=\"SERVER_ERROR\"}[5m])) by (uri)",
+              "legendFormat": "{{uri}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "title": "Latency by Route (p95)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le, uri))",
+              "legendFormat": "{{uri}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "title": "DB Connection Pool Utilization (HikariCP)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(hikaricp_connections_active)", "legendFormat": "active", "refId": "A" },
+            { "expr": "sum(hikaricp_connections_idle)", "legendFormat": "idle", "refId": "B" },
+            { "expr": "sum(hikaricp_connections_pending)", "legendFormat": "pending (waiting)", "refId": "C" },
+            { "expr": "sum(hikaricp_connections_max)", "legendFormat": "max (capacity)", "refId": "D" }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "DB Connection Acquire Wait (p95)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(hikaricp_connections_acquire_milliseconds_bucket[5m])) by (le))",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "CPU Throttling Ratio",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 } },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{container=\"message-service\"}[5m])) by (pod) / sum(rate(container_cpu_cfs_periods_total{container=\"message-service\"}[5m])) by (pod)",
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "title": "Container Memory vs Limit",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "bytes" } },
+          "targets": [
+            { "expr": "sum(container_memory_working_set_bytes{container=\"message-service\"}) by (pod)", "legendFormat": "{{pod}}", "refId": "A" },
+            { "expr": "max(container_spec_memory_limit_bytes{container=\"message-service\"})", "legendFormat": "limit", "refId": "B" }
+          ]
+        },
+        {
+          "id": 14,
+          "title": "Pod Health (restarts & readiness)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "sum(increase(kube_pod_container_status_restarts_total{container=\"message-service\"}[15m]))", "legendFormat": "restarts (15m)", "refId": "A" },
+            { "expr": "sum(kube_pod_status_ready{condition=\"true\",pod=~\"message-service.*\"})", "legendFormat": "ready pods", "refId": "B" }
+          ]
+        }
+      ]
+    }
