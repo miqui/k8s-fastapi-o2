@@ -168,14 +168,24 @@ PostgreSQL instance. Production and the kind deployment still use real PostgreSQ
 
 ## Deployment with Kind / Kubernetes
 
-- **Deploy to local Kind cluster**: `./deploy-kind.sh`
+- **Deploy to local Kind cluster**:
+  - **With 1Password CLI (`op run`)** *(Recommended)*:
+    ```bash
+    cp .env.example .env
+    # Edit .env with your op://<vault>/<item>/<field> URIs
+    op run --env-file=.env -- ./deploy-kind.sh
+    ```
+  - **Direct execution** (uses default local development credentials):
+    ```bash
+    ./deploy-kind.sh
+    ```
   - Creates a 7-node kind cluster (1 control-plane, 2 API workers, 1 DB worker, 1 observability
     worker, 1 cache worker, 1 OpenObserve worker) if it doesn't exist yet.
   - Installs the ingress-nginx controller and waits for it to become ready.
   - Builds the `message-service:latest` image and loads it into the cluster.
-  - Applies `k8s/observability/` (OTel Collector, Prometheus, Grafana - see Architecture above), then
+  - Applies `k8s/observability/` (OTel Collector, Prometheus, Grafana - see Architecture above), dynamically injects observability secrets from environment, then
     installs OpenObserve via Helm (`openobserve/openobserve-standalone` - see Architecture above).
-  - Applies `k8s/` via Kustomize: `Secret` + `ConfigMap`s, the `postgres` `StatefulSet`/headless
+  - Applies `k8s/` via Kustomize: `Secret` + `ConfigMap`s, dynamically injects PostgreSQL database credentials from environment, the `postgres` `StatefulSet`/headless
     `Service`, the `hazelcast` `Deployment`/`Service`, the `message-service` `Deployment`/`Service`
     (`ClusterIP`), and an `Ingress` routing to it.
   - Waits for PostgreSQL and Hazelcast to become ready before waiting on the API rollout (the API

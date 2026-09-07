@@ -43,11 +43,28 @@ docker build -t "${IMAGE_NAME}" .
 echo "=> Loading '${IMAGE_NAME}' into kind cluster..."
 kind load docker-image "${IMAGE_NAME}" --name "${CLUSTER_NAME}"
 
-# 6. Apply the observability stack (OTel Collector, Prometheus, Grafana)
+# 6. Apply the observability stack (OTel Collector, Prometheus, Grafana, OpenObserve)
 echo "=> Applying observability stack manifests..."
 kubectl apply -k k8s/observability/
 
-# 6a. Install OpenObserve (openobserve-standalone chart - single node, not the HA chart).
+# 6a. Inject observability secrets from environment (e.g. op run)
+echo "=> Configuring observability secrets..."
+if [ -n "${GF_SECURITY_ADMIN_USER:-}" ] || [ -n "${GF_SECURITY_ADMIN_PASSWORD:-}" ]; then
+  kubectl create secret generic grafana-credentials \
+    --namespace observability \
+    --from-literal=GF_SECURITY_ADMIN_USER="${GF_SECURITY_ADMIN_USER:-${GF_ADMIN_USER:-admin}}" \
+    --from-literal=GF_SECURITY_ADMIN_PASSWORD="${GF_SECURITY_ADMIN_PASSWORD:-${GF_ADMIN_PASSWORD:-admin}}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+fi
+
+if [ -n "${ZO_ROOT_USER_PASSWORD:-}" ] || [ -n "${ZO_PASSWORD:-}" ]; then
+  kubectl create secret generic openobserve-remote-write-credentials \
+    --namespace observability \
+    --from-literal=password="${ZO_ROOT_USER_PASSWORD:-${ZO_PASSWORD:-YOUR_OPENOBSERVE_ROOT_PASSWORD}}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+fi
+
+# 6b. Install OpenObserve (openobserve-standalone chart - single node, not the HA chart).
 #     Prometheus (deployed above) remote_writes every scraped series, including the
 #     message-service metrics, into it - see k8s/observability/prometheus-configmap.yaml.
 echo "=> Installing OpenObserve (openobserve-standalone chart)..."
@@ -55,15 +72,37 @@ if ! helm repo list | grep -q '^openobserve[[:space:]]'; then
   helm repo add openobserve https://charts.openobserve.ai
 fi
 helm repo update openobserve
+
+HELM_AUTH_ARGS=()
+if [ -n "${ZO_ROOT_USER_EMAIL:-}" ] || [ -n "${ZO_EMAIL:-}" ]; then
+  HELM_AUTH_ARGS+=(--set "auth.ZO_ROOT_USER_EMAIL=${ZO_ROOT_USER_EMAIL:-${ZO_EMAIL:-YOUR_OPENOBSERVE_ROOT_EMAIL}}")
+fi
+if [ -n "${ZO_ROOT_USER_PASSWORD:-}" ] || [ -n "${ZO_PASSWORD:-}" ]; then
+  HELM_AUTH_ARGS+=(--set "auth.ZO_ROOT_USER_PASSWORD=${ZO_ROOT_USER_PASSWORD:-${ZO_PASSWORD:-YOUR_OPENOBSERVE_ROOT_PASSWORD}}")
+fi
+
 helm upgrade --install openobserve openobserve/openobserve-standalone \
   --version 0.92.2 \
   --namespace observability \
   -f k8s/observability/openobserve-values.yaml \
+  "${HELM_AUTH_ARGS[@]}" \
   --wait --timeout 180s
 
 # 7. Apply Kubernetes manifests
 echo "=> Applying Kubernetes manifests..."
 kubectl apply -k k8s/
+
+# 7a. Inject database secrets from environment (e.g. op run)
+if [ -n "${DB_USER:-}" ] || [ -n "${DB_PASSWORD:-}" ] || [ -n "${POSTGRES_USER:-}" ] || [ -n "${POSTGRES_PASSWORD:-}" ]; then
+  echo "=> Configuring PostgreSQL database credentials from environment..."
+  kubectl create secret generic postgres-credentials \
+    --namespace default \
+    --from-literal=DB_USER="${DB_USER:-YOUR_POSTGRES_DB_USER}" \
+    --from-literal=DB_PASSWORD="${DB_PASSWORD:-YOUR_POSTGRES_DB_PASSWORD}" \
+    --from-literal=POSTGRES_USER="${POSTGRES_USER:-${DB_USER:-YOUR_POSTGRES_USER}}" \
+    --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-${DB_PASSWORD:-YOUR_POSTGRES_PASSWORD}}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+fi
 
 # 8. Wait for PostgreSQL and Hazelcast to be ready before the API rolls out
 echo "=> Waiting for PostgreSQL StatefulSet to be ready..."
