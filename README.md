@@ -19,7 +19,12 @@ cluster topology, ingress, and the full observability stack — is unchanged fro
   idempotently on every container startup (see the Dockerfile's `ENTRYPOINT`).
 - **Cluster topology** (`k8s/kind-config.yaml`): 1 control-plane + 6 workers.
   - 2 workers labeled `workload=api` — the `message-service` Deployment (3 replicas) is pinned there
-    via `nodeSelector`, with preferred pod anti-affinity so replicas spread across those nodes.
+    via `nodeSelector`, with preferred pod anti-affinity so replicas spread across those nodes. A
+    `HorizontalPodAutoscaler` (`k8s/hpa.yaml`) keeps it between 3 and 6 replicas, scaling on CPU
+    (70% average utilization) and memory (80%) against the container's `resources.requests` in
+    `k8s/deployment.yaml`. It reads usage from **metrics-server**, which `deploy-kind.sh` installs
+    with `--kubelet-insecure-tls` (kind's kubelet serving certs aren't signed for metrics-server's
+    default verification).
   - 1 worker labeled `workload=db` — the `postgres` StatefulSet (1 replica, with a `PersistentVolumeClaim`)
     is pinned there via `nodeSelector`.
   - 1 worker labeled `workload=observability` — the OTel Collector, Prometheus, and Grafana
@@ -163,13 +168,15 @@ runs, via Prisma's own postinstall hook).
   - Creates a 7-node kind cluster (1 control-plane, 2 API workers, 1 DB worker, 1 observability
     worker, 1 cache worker, 1 OpenObserve worker) if it doesn't exist yet.
   - Installs the ingress-nginx controller and waits for it to become ready.
+  - Installs metrics-server (patched with `--kubelet-insecure-tls`) and waits for it to become ready -
+    required for the `message-service` `HorizontalPodAutoscaler` to read CPU/memory usage.
   - Builds the `message-service:latest` image and loads it into the cluster.
   - Applies `k8s/observability/` (OTel Collector, Prometheus, Grafana - see Architecture above), dynamically injects observability secrets from environment, then
     installs OpenObserve via Helm (`openobserve/openobserve-standalone` - see Architecture above)
     and Headlamp via Helm (`headlamp/headlamp` - see Architecture above).
   - Applies `k8s/` via Kustomize: `Secret` + `ConfigMap`s, dynamically injects PostgreSQL database credentials from environment, the `postgres` `StatefulSet`/headless
     `Service`, the `hazelcast` `Deployment`/`Service`, the `message-service` `Deployment`/`Service`
-    (`ClusterIP`), and an `Ingress` routing to it.
+    (`ClusterIP`)/`HorizontalPodAutoscaler`, and an `Ingress` routing to it.
   - Waits for PostgreSQL and Hazelcast to become ready before waiting on the API rollout (the API
     Deployment also runs `wait-for-postgres` and `wait-for-hazelcast` init containers).
 - **Tear down cluster**: `./teardown-kind.sh`

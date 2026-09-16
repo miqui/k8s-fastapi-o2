@@ -10,5 +10,6 @@ resources:
   - hazelcast-deployment.yaml
   - hazelcast-service.yaml
   - deployment.yaml
+  - hpa.yaml
   - service.yaml
   - ingress.yaml
