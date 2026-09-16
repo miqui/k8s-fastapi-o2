@@ -24,6 +24,10 @@ actuator probes) is unchanged — only the persistence layer differs.
     via `nodeSelector`.
   - 1 worker labeled `workload=openobserve` — the OpenObserve `StatefulSet` (see below) is pinned
     there via `nodeSelector`.
+  - [Headlamp](https://headlamp.dev/) (a general-purpose Kubernetes web UI, own `headlamp`
+    namespace) is pinned to the `workload=observability` node too, alongside Grafana - it's a
+    lightweight single-pod dashboard with no metrics-pipeline role of its own, so it doesn't
+    warrant a dedicated node.
 - **Lookup cache**: `MessageService.getMessageById` is `@Cacheable` (cache name `messages`), backed by
   a standalone [Hazelcast](https://github.com/hazelcast/hazelcast) member (`k8s/hazelcast-deployment.yaml`,
   `k8s/hazelcast-service.yaml`) that each `message-service` pod connects to as a **client**
@@ -68,6 +72,17 @@ actuator probes) is unchanged — only the persistence layer differs.
   even though this is all disposable local-kind-only). Query its data under the `default` org, stream
   names matching the Prometheus metric names (e.g. `http_server_requests_milliseconds_count`,
   `container_memory_working_set_bytes`).
+
+  **[Headlamp](https://headlamp.dev/)** (`headlamp/headlamp` Helm chart, own `headlamp` namespace -
+  a general-purpose Kubernetes web UI, not part of the message-service metrics pipeline above;
+  installed by `deploy-kind.sh`, values in `k8s/headlamp/headlamp-values.yaml`) gives a
+  browse/inspect/edit view over every resource in the cluster (pods, deployments, logs, exec,
+  node status, etc.), which is a different job than Grafana/OpenObserve's time-series metrics. It's
+  exposed at `http://headlamp.localhost/`. No OIDC is configured, so the login page needs a bearer
+  token; the chart's default `ClusterRoleBinding` grants its own `headlamp` ServiceAccount
+  `cluster-admin`, so the simplest local token is `kubectl create token headlamp -n headlamp
+  --duration=24h` (that's cluster-admin in the browser - fine for this disposable local kind
+  cluster only, not a pattern to reuse anywhere shared).
 
   `write_relabel_configs` in `k8s/observability/prometheus-configmap.yaml` deliberately keeps only
   four scrape jobs - `otel-collector` (the message-service's own metrics), plus `node-exporter`,
@@ -184,7 +199,8 @@ PostgreSQL instance. Production and the kind deployment still use real PostgreSQ
   - Installs the ingress-nginx controller and waits for it to become ready.
   - Builds the `message-service:latest` image and loads it into the cluster.
   - Applies `k8s/observability/` (OTel Collector, Prometheus, Grafana - see Architecture above), dynamically injects observability secrets from environment, then
-    installs OpenObserve via Helm (`openobserve/openobserve-standalone` - see Architecture above).
+    installs OpenObserve via Helm (`openobserve/openobserve-standalone` - see Architecture above)
+    and Headlamp via Helm (`headlamp/headlamp` - see Architecture above).
   - Applies `k8s/` via Kustomize: `Secret` + `ConfigMap`s, dynamically injects PostgreSQL database credentials from environment, the `postgres` `StatefulSet`/headless
     `Service`, the `hazelcast` `Deployment`/`Service`, the `message-service` `Deployment`/`Service`
     (`ClusterIP`), and an `Ingress` routing to it.
@@ -338,6 +354,12 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
   ```
   (`start_time`/`end_time` are epoch microseconds; OpenObserve rejects a query whose range doesn't
   look like one, e.g. `0`.)
+- **Headlamp**: `http://headlamp.localhost/` — a general-purpose Kubernetes dashboard (not a
+  metrics tool), for browsing/inspecting/editing any resource across the whole cluster: pods,
+  deployments, logs, exec-into-pod, node status, etc. Log in with a bearer token - `kubectl create
+  token headlamp -n headlamp --duration=24h` uses the chart's own `headlamp` ServiceAccount, which
+  already has `cluster-admin` via its default `ClusterRoleBinding` (see
+  `k8s/headlamp/headlamp-values.yaml`).
 - **OTel Collector** (`k8s/observability/otel-collector-configmap.yaml`): receives OTLP metrics on
   `:4317` (gRPC) / `:4318` (HTTP) from every `message-service` pod
   (`OTEL_METRICS_URL` in `k8s/configmap.yaml` points at it) and re-exports them in Prometheus format
