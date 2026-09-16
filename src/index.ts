@@ -1,6 +1,7 @@
 import "./env";
 import http from "node:http";
 import { ApolloServer } from "@apollo/server";
+import { ApolloServerPluginLandingPageLocalDefault } from "@apollo/server/plugin/landingPage/default";
 import { expressMiddleware } from "@as-integrations/express5";
 import cors from "cors";
 import express from "express";
@@ -32,7 +33,19 @@ async function main(): Promise<void> {
     res.status(ready ? 200 : 503).json({ status: ready ? "UP" : "DOWN" });
   });
 
-  const apollo = new ApolloServer({ typeDefs, resolvers, plugins: [metricsPlugin] });
+  // NODE_ENV=production (set in the Dockerfile) makes Apollo Server default to a bare
+  // "server is running" landing page instead of the interactive Sandbox, disables schema
+  // introspection (which Sandbox needs to populate its schema view), and controls whether
+  // error responses include a stacktrace - explicitly setting all three here decouples
+  // them from NODE_ENV: Sandbox and introspection stay on for this disposable local dev
+  // cluster (see the "GraphQL API" section in README.md) while stacktraces stay off.
+  const apollo = new ApolloServer({
+    typeDefs,
+    resolvers,
+    plugins: [metricsPlugin, ApolloServerPluginLandingPageLocalDefault({ embed: true })],
+    includeStacktraceInErrorResponses: false,
+    introspection: true,
+  });
   await apollo.start();
   app.use("/graphql", express.json(), expressMiddleware(apollo));
 
