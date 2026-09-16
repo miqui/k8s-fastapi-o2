@@ -318,10 +318,22 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
   look like one, e.g. `0`.)
 - **Headlamp**: `http://headlamp.localhost/` — a general-purpose Kubernetes dashboard (not a
   metrics tool), for browsing/inspecting/editing any resource across the whole cluster: pods,
-  deployments, logs, exec-into-pod, node status, etc. Log in with a bearer token - `kubectl create
-  token headlamp -n headlamp --duration=24h` uses the chart's own `headlamp` ServiceAccount, which
-  already has `cluster-admin` via its default `ClusterRoleBinding` (see
-  `k8s/headlamp/headlamp-values.yaml`).
+  deployments, logs, exec-into-pod, node status, etc. Log in with a bearer token:
+
+  1. Generate a token for the chart's own `headlamp` ServiceAccount, which already has
+     `cluster-admin` via its default `ClusterRoleBinding` (see `k8s/headlamp/headlamp-values.yaml`):
+     ```bash
+     kubectl create token headlamp -n headlamp --duration=24h
+     ```
+  2. Open `http://headlamp.localhost/` and paste the token into the login page's token field.
+     On macOS, pipe straight to the clipboard instead of copying from a terminal selection - long
+     tokens are prone to picking up a stray line break or trailing whitespace when copied by hand,
+     which Headlamp will reject as an invalid token:
+     ```bash
+     kubectl create token headlamp -n headlamp --duration=24h | tr -d '\n' | pbcopy
+     ```
+  3. The token expires after `--duration` (24h above) - re-run the command and log in again once
+     it does; there's no refresh flow.
 - **OTel Collector** (`k8s/observability/otel-collector-configmap.yaml`): receives OTLP metrics on
   `:4317` (gRPC) / `:4318` (HTTP) from every `message-service` pod
   (`OTEL_METRICS_URL` in `k8s/configmap.yaml` points at it) and re-exports them in Prometheus format
