@@ -71,14 +71,14 @@ spec:
               memory: "1024Mi"
           startupProbe:
             httpGet:
-              path: /actuator/health/liveness
+              path: /health/liveness
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 5
             failureThreshold: 12
           livenessProbe:
             httpGet:
-              path: /actuator/health/liveness
+              path: /health/liveness
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -86,7 +86,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /actuator/health/readiness
+              path: /health/readiness
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 5

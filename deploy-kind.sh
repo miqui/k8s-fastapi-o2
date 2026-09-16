@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
-CLUSTER_NAME="kind-springboot-mybatis-cluster"
+CLUSTER_NAME="kind-graphql-prisma-cluster"
 IMAGE_NAME="message-service:latest"
 
 echo "=========================================================="
-echo " Spring Boot 4 + MyBatis + PostgreSQL - Kind Deployment    "
+echo " GraphQL (Apollo Server) + Prisma + PostgreSQL - Kind Deploy"
 echo "=========================================================="
 
 # 1. Check prerequisites
@@ -162,8 +162,8 @@ kubectl get pods -n headlamp -o wide
 
 echo ""
 echo "=========================================================="
-echo " Service is accessible at: http://localhost/api/messages"
-echo " Actuator Health:          http://localhost/actuator/health"
+echo " GraphQL endpoint:         http://localhost/graphql"
+echo " Health:                   http://localhost/health/liveness"
 echo " Grafana:                  http://grafana.localhost/ (credentials from 1Password / Secret)"
 echo " OpenObserve:              http://openobserve.localhost/ (credentials from 1Password / Secret)"
 echo " Headlamp:                 http://headlamp.localhost/ (login token: kubectl create token headlamp -n headlamp --duration=24h)"

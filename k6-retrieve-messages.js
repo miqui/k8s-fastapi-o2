@@ -11,43 +11,60 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost/api/messages';
+const BASE_URL = __ENV.BASE_URL || 'http://localhost/graphql';
+const jsonHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+
+const MESSAGES_QUERY = `
+  query ($limit: Int, $offset: Int) {
+    messages(limit: $limit, offset: $offset) {
+      totalCount
+      items { id title content version author { id name } }
+    }
+  }
+`;
 
 export default function () {
-  const params = {
-    headers: {
-      'Accept': 'application/json',
-    },
-    tags: { name: 'GetAllMessages' },
-  };
-
-  const res = http.get(BASE_URL, params);
+  const res = http.post(BASE_URL, JSON.stringify({
+    query: MESSAGES_QUERY,
+    variables: { limit: 50, offset: 0 },
+  }), { headers: jsonHeaders, tags: { name: 'GetAllMessages' } });
 
   check(res, {
     'status is 200': (r) => r.status === 200,
-    'response received': (r) => r.body && r.body.length > 0,
-    'is valid JSON array': (r) => {
+    'no errors': (r) => {
       try {
-        const data = r.json();
-        return Array.isArray(data) && data.length > 0;
+        return !r.json().errors;
       } catch (e) {
         return false;
       }
     },
-    'has X-Total-Count header': (r) => !!r.headers['X-Total-Count'],
+    'has at least one item': (r) => {
+      try {
+        return r.json().data.messages.items.length > 0;
+      } catch (e) {
+        return false;
+      }
+    },
+    'has totalCount': (r) => {
+      try {
+        return typeof r.json().data.messages.totalCount === 'number';
+      } catch (e) {
+        return false;
+      }
+    },
   });
 
-  // Paginate with limit/offset (see MessageController#getAllMessages): limit is capped at 200
-  // server-side, so a small page should come back exactly that size (never more).
-  const pageRes = http.get(`${BASE_URL}?limit=5&offset=0`, {
-    headers: { 'Accept': 'application/json' },
-    tags: { name: 'GetMessagesPage' },
-  });
+  // Paginate with limit/offset (see the `messages` resolver in src/resolvers.ts): limit is
+  // capped at 200 server-side, so a small page should come back exactly that size (never more).
+  const pageRes = http.post(BASE_URL, JSON.stringify({
+    query: MESSAGES_QUERY,
+    variables: { limit: 5, offset: 0 },
+  }), { headers: jsonHeaders, tags: { name: 'GetMessagesPage' } });
   check(pageRes, {
     'page: status is 200': (r) => r.status === 200,
     'page: at most 5 items': (r) => {
       try {
-        return r.json().length <= 5;
+        return r.json().data.messages.items.length <= 5;
       } catch (e) {
         return false;
       }

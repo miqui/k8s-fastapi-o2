@@ -1,31 +1,42 @@
-# Multi-stage Dockerfile for Spring Boot 4 REST API
+# Multi-stage Dockerfile for the Apollo Server + Prisma GraphQL API
 
 # Stage 1: Build stage
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /workspace
 
-# Copy maven wrapper and pom.xml first for dependency caching
-COPY .mvn/ .mvn/
-COPY mvnw pom.xml ./
-RUN ./mvnw dependency:go-offline -B
+# Copy manifests first for dependency caching
+COPY package.json package-lock.json ./
+COPY prisma/ prisma/
+RUN npm ci
 
-# Copy source code and build
+# Copy source and build
+COPY tsconfig.json ./
 COPY src/ src/
-RUN ./mvnw clean package -DskipTests
+RUN npm run build
 
 # Stage 2: Runtime stage
-FROM eclipse-temurin:21-jre-alpine
+FROM node:24-alpine
 WORKDIR /app
+
+# Prisma's query engine binary needs openssl on Alpine (musl) - without it the engine
+# fails to load at runtime with a cryptic "Unable to require libquery_engine" error.
+RUN apk add --no-cache openssl
 
 # Create a non-root group and user for security
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Copy compiled jar from builder stage
-COPY --from=builder /workspace/target/message-service-0.0.1-SNAPSHOT.jar app.jar
+COPY package.json package-lock.json ./
+COPY prisma/ prisma/
+RUN npm ci --omit=dev && npx prisma generate
+
+COPY --from=builder /workspace/dist ./dist
 RUN chown -R appuser:appgroup /app
 
 USER appuser
 
+ENV NODE_ENV=production
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-Djava.security.egd=file:/dev/./urandom", "-jar", "app.jar"]
+# Idempotent - safe to run on every startup (replaces the old Java app's
+# spring.sql.init.mode=always), same as postgres_exporter/schema.sql before it.
+ENTRYPOINT ["sh", "-c", "node dist/migrate.js && node dist/index.js"]

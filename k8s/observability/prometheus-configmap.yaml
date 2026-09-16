@@ -11,7 +11,7 @@ data:
       scrape_interval: 15s
 
     # Replicates the message-service metrics (job "otel-collector" below - the API's
-    # Micrometer/JVM/HikariCP metrics pushed via OTLP, see application.properties) plus
+    # Node.js/GraphQL/Prisma metrics pushed via OTLP, see src/telemetry.ts) plus
     # kind cluster ops metrics (node-exporter, kube-state-metrics - the same jobs behind
     # the "kind cluster ops" Grafana dashboard) into OpenObserve (see
     # k8s/observability/openobserve-values.yaml), which exposes a Prometheus

@@ -1,0 +1,45 @@
+// Prisma schema for the message-service GraphQL API.
+//
+// `postgresqlExtensions` lets Prisma manage `CREATE EXTENSION IF NOT EXISTS
+// pg_stat_statements` declaratively (replaces schema.sql's manual DDL) - required by
+// postgres_exporter's --collector.stat_statements flag, see
+// k8s/postgres-statefulset.yaml and the "PostgreSQL Ops & Queries" Grafana dashboard.
+// `metrics` enables prisma.$metrics.json(), sampled in src/telemetry.ts as the
+// replacement for the old HikariCP pool metrics.
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions", "metrics"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pg_stat_statements]
+}
+
+model Author {
+  id        String    @id @default(uuid())
+  name      String    @db.VarChar(50)
+  email     String    @unique @db.VarChar(100)
+  createdAt DateTime  @default(now()) @map("created_at")
+  messages  Message[]
+
+  @@map("authors")
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  title     String   @db.VarChar(100)
+  content   String   @db.VarChar(1000)
+  authorId  String   @map("author_id")
+  author    Author   @relation(fields: [authorId], references: [id])
+  createdAt DateTime @default(now()) @map("created_at")
+  // Optimistic locking - see updateMessage in src/resolvers.ts. Mirrors the old
+  // MyBatis `UPDATE ... SET version = version + 1 WHERE id = ? AND version = ?`.
+  version   Int      @default(0)
+
+  // Matches messages(limit, offset)'s ORDER BY createdAt, id - keeps keyset
+  // pagination stable across pages without a full-table sort per request.
+  @@index([createdAt, id])
+  @@map("messages")
+}

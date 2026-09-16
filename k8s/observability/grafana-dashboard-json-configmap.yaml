@@ -191,10 +191,10 @@ data:
         }
       ]
     }
-  message-service.json: |
+  graphql-api.json: |
     {
-      "title": "message-service",
-      "uid": "message-service",
+      "title": "graphql-api",
+      "uid": "graphql-api",
       "timezone": "browser",
       "schemaVersion": 39,
       "refresh": "10s",
@@ -219,12 +219,14 @@ data:
         },
         {
           "id": 2,
-          "title": "Active DB Connections (HikariCP)",
+          "title": "Prisma Pool Connections (open/busy/idle)",
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
-            { "expr": "hikaricp_connections_active", "refId": "A" }
+            { "expr": "prisma_pool_connections_open", "legendFormat": "open", "refId": "A" },
+            { "expr": "prisma_pool_connections_busy", "legendFormat": "busy", "refId": "B" },
+            { "expr": "prisma_pool_connections_idle", "legendFormat": "idle", "refId": "C" }
           ]
         },
         {
@@ -237,75 +239,73 @@ data:
             "defaults": { "unit": "percentunit", "min": 0, "max": 1 }
           },
           "targets": [
-            { "expr": "process_cpu_usage", "refId": "A" }
+            { "expr": "nodejs_process_cpu_usage_ratio", "refId": "A" }
           ]
         },
         {
           "id": 4,
-          "title": "JVM Live Threads",
+          "title": "Event Loop Lag (p99)",
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
-            { "expr": "jvm_threads_live", "refId": "A" }
+            { "expr": "nodejs_eventloop_lag_p99_ms", "refId": "A" }
           ]
         },
         {
           "id": 5,
-          "title": "HTTP Request Rate by Endpoint",
+          "title": "GraphQL Request Rate by Operation",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(http_server_requests_milliseconds_count[1m])) by (uri, method, status)",
-              "legendFormat": "{{method}} {{uri}} ({{status}})",
+              "expr": "sum(rate(graphql_requests_total[1m])) by (operation)",
+              "legendFormat": "{{operation}}",
               "refId": "A"
             }
           ]
         },
         {
           "id": 6,
-          "title": "HTTP Average Request Latency",
+          "title": "GraphQL Average Request Latency",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
             {
-              "expr": "sum(rate(http_server_requests_milliseconds_sum[1m])) by (uri) / sum(rate(http_server_requests_milliseconds_count[1m])) by (uri)",
-              "legendFormat": "{{uri}}",
+              "expr": "sum(rate(graphql_request_duration_ms_sum[1m])) by (operation) / sum(rate(graphql_request_duration_ms_count[1m])) by (operation)",
+              "legendFormat": "{{operation}}",
               "refId": "A"
             }
           ]
         },
         {
           "id": 7,
-          "title": "JVM Heap Memory Used",
+          "title": "Process Memory (RSS / Heap Used)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "bytes" } },
           "targets": [
-            {
-              "expr": "sum(jvm_memory_used_bytes{area=\"heap\"}) by (id)",
-              "legendFormat": "{{id}}",
-              "refId": "A"
-            }
+            { "expr": "nodejs_process_memory_rss_bytes", "legendFormat": "rss", "refId": "A" },
+            { "expr": "nodejs_process_memory_heap_used_bytes", "legendFormat": "heap used", "refId": "B" }
           ]
         },
         {
           "id": 8,
-          "title": "GC Pause Time (rate)",
+          "title": "GraphQL Error Rate by Operation",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "fieldConfig": { "defaults": { "unit": "ms" } },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(jvm_gc_pause_milliseconds_sum[5m])) by (action, cause)",
-              "legendFormat": "{{action}} ({{cause}})",
+              "expr": "sum(rate(graphql_errors_total[5m])) by (operation)",
+              "legendFormat": "{{operation}}",
               "refId": "A"
             }
           ]
@@ -482,246 +482,6 @@ data:
             {
               "expr": "sum(increase(kube_pod_container_status_restarts_total[15m])) by (namespace, pod)",
               "legendFormat": "{{namespace}}/{{pod}}",
-              "refId": "A"
-            }
-          ]
-        }
-      ]
-    }
-  jvm-gc.json: |
-    {
-      "title": "JVM & GC",
-      "uid": "jvm-gc",
-      "timezone": "browser",
-      "schemaVersion": 39,
-      "refresh": "10s",
-      "time": { "from": "now-30m", "to": "now" },
-      "panels": [
-        { "id": 100, "title": "Heap & Memory", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
-        {
-          "id": 1,
-          "title": "Heap Used by Region",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "fieldConfig": { "defaults": { "unit": "bytes" } },
-          "targets": [
-            {
-              "expr": "jvm_memory_used_bytes{area=\"heap\"}",
-              "legendFormat": "{{k8s_pod_name}} - {{id}}",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 2,
-          "title": "Non-Heap Memory (Metaspace / Code Cache)",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "fieldConfig": { "defaults": { "unit": "bytes" } },
-          "targets": [
-            {
-              "expr": "jvm_memory_used_bytes{area=\"nonheap\"}",
-              "legendFormat": "{{k8s_pod_name}} - {{id}}",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 3,
-          "title": "Container Memory vs 1024Mi Limit",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "description": "JVM-GC.md target: stay below 85% of the pod's memory limit to avoid the cgroup OOM killer.",
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percent",
-              "min": 0,
-              "max": 100,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  { "color": "green", "value": null },
-                  { "color": "yellow", "value": 70 },
-                  { "color": "red", "value": 85 }
-                ]
-              },
-              "custom": { "thresholdsStyle": { "mode": "line" } }
-            }
-          },
-          "targets": [
-            {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"default\",container=\"message-service\"}) by (pod) / sum(kube_pod_container_resource_limits{namespace=\"default\",container=\"message-service\",resource=\"memory\"}) by (pod) * 100",
-              "legendFormat": "{{pod}}",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 4,
-          "title": "Heap Usage vs Max (MaxRAMPercentage headroom)",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "description": "JVM-GC.md recommends MaxRAMPercentage 70-75%, leaving headroom for Metaspace/threads/native memory.",
-          "fieldConfig": {
-            "defaults": {
-              "unit": "percent",
-              "min": 0,
-              "max": 100,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  { "color": "green", "value": null },
-                  { "color": "yellow", "value": 75 },
-                  { "color": "red", "value": 90 }
-                ]
-              },
-              "custom": { "thresholdsStyle": { "mode": "line" } }
-            }
-          },
-          "targets": [
-            {
-              "expr": "sum(jvm_memory_used_bytes{area=\"heap\"}) by (k8s_pod_name) / sum(jvm_memory_max_bytes{area=\"heap\"}) by (k8s_pod_name) * 100",
-              "legendFormat": "{{k8s_pod_name}}",
-              "refId": "A"
-            }
-          ]
-        },
-        { "id": 101, "title": "Garbage Collection", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 } },
-        {
-          "id": 5,
-          "title": "GC Pause Time (avg / max)",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "description": "JVM-GC.md target: MaxGCPauseMillis=100 - max pause should stay near/below this line.",
-          "fieldConfig": {
-            "defaults": {
-              "unit": "ms",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  { "color": "green", "value": null },
-                  { "color": "red", "value": 100 }
-                ]
-              },
-              "custom": { "thresholdsStyle": { "mode": "line" } }
-            }
-          },
-          "targets": [
-            {
-              "expr": "jvm_gc_pause_max_milliseconds",
-              "legendFormat": "{{k8s_pod_name}} max",
-              "refId": "A"
-            },
-            {
-              "expr": "sum(rate(jvm_gc_pause_milliseconds_sum[1m])) by (k8s_pod_name) / sum(rate(jvm_gc_pause_milliseconds_count[1m])) by (k8s_pod_name)",
-              "legendFormat": "{{k8s_pod_name}} avg",
-              "refId": "B"
-            }
-          ]
-        },
-        {
-          "id": 6,
-          "title": "GC Frequency",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "fieldConfig": { "defaults": { "unit": "cpm" } },
-          "targets": [
-            {
-              "expr": "sum(rate(jvm_gc_pause_milliseconds_count[1m])) by (k8s_pod_name, action) * 60",
-              "legendFormat": "{{k8s_pod_name}} - {{action}}",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 7,
-          "title": "Allocation Rate",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "description": "JVM-GC.md 3.2: UseStringDeduplication targets reducing this in JSON/MyBatis-heavy workloads.",
-          "fieldConfig": { "defaults": { "unit": "Bps" } },
-          "targets": [
-            {
-              "expr": "sum(rate(jvm_gc_memory_allocated_bytes_total[1m])) by (k8s_pod_name)",
-              "legendFormat": "{{k8s_pod_name}}",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 8,
-          "title": "Promotion Rate (Young -> Old)",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "fieldConfig": { "defaults": { "unit": "Bps" } },
-          "targets": [
-            {
-              "expr": "sum(rate(jvm_gc_memory_promoted_bytes_total[1m])) by (k8s_pod_name)",
-              "legendFormat": "{{k8s_pod_name}}",
-              "refId": "A"
-            }
-          ]
-        },
-        { "id": 102, "title": "Threads & Classes", "type": "row", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 } },
-        {
-          "id": 9,
-          "title": "Thread States",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [
-            {
-              "expr": "jvm_threads_states",
-              "legendFormat": "{{k8s_pod_name}} - {{state}}",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 10,
-          "title": "Live / Daemon / Peak Threads",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [
-            { "expr": "jvm_threads_live", "legendFormat": "{{k8s_pod_name}} live", "refId": "A" },
-            { "expr": "jvm_threads_daemon", "legendFormat": "{{k8s_pod_name}} daemon", "refId": "B" },
-            { "expr": "jvm_threads_peak", "legendFormat": "{{k8s_pod_name}} peak", "refId": "C" }
-          ]
-        },
-        {
-          "id": 11,
-          "title": "Classes Loaded",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [
-            {
-              "expr": "jvm_classes_loaded",
-              "legendFormat": "{{k8s_pod_name}}",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "id": 12,
-          "title": "Process CPU Usage",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
-          "targets": [
-            {
-              "expr": "process_cpu_usage",
-              "legendFormat": "{{k8s_pod_name}}",
               "refId": "A"
             }
           ]
@@ -1093,7 +853,7 @@ data:
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
-            { "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\"}[5m]))", "refId": "A" }
+            { "expr": "sum(rate(graphql_requests_total[5m]))", "refId": "A" }
           ]
         },
         {
@@ -1105,14 +865,14 @@ data:
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))",
               "refId": "A"
             }
           ]
         },
         {
           "id": 3,
-          "title": "5xx Error Ratio",
+          "title": "Error Ratio",
           "type": "gauge",
           "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -1133,32 +893,32 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\",outcome=\"SERVER_ERROR\"}[5m])) / sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\"}[5m]))",
+              "expr": "sum(rate(graphql_errors_total[5m])) / sum(rate(graphql_requests_total[5m]))",
               "refId": "A"
             }
           ]
         },
         {
           "id": 4,
-          "title": "In-Flight Requests",
+          "title": "Prisma Pool Busy Connections",
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(http_server_requests_active_milliseconds_count)", "refId": "A" }
+            { "expr": "sum(prisma_pool_connections_busy)", "refId": "A" }
           ]
         },
         {
           "id": 5,
-          "title": "Request Rate by Route & Method",
+          "title": "Request Rate by Operation",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\"}[5m])) by (method, uri)",
-              "legendFormat": "{{method}} {{uri}}",
+              "expr": "sum(rate(graphql_requests_total[5m])) by (operation)",
+              "legendFormat": "{{operation}}",
               "refId": "A"
             }
           ]
@@ -1171,82 +931,76 @@ data:
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
-            { "expr": "histogram_quantile(0.90, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))", "legendFormat": "p90", "refId": "B" },
-            { "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))", "legendFormat": "p95", "refId": "C" },
-            { "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le))", "legendFormat": "p99", "refId": "D" }
+            { "expr": "histogram_quantile(0.50, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
+            { "expr": "histogram_quantile(0.90, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))", "legendFormat": "p90", "refId": "B" },
+            { "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))", "legendFormat": "p95", "refId": "C" },
+            { "expr": "histogram_quantile(0.99, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))", "legendFormat": "p99", "refId": "D" }
           ]
         },
         {
           "id": 7,
-          "title": "Request Rate by Outcome",
+          "title": "Error Rate by Operation",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\"}[5m])) by (outcome)",
-              "legendFormat": "{{outcome}}",
+              "expr": "sum(rate(graphql_errors_total[5m])) by (operation)",
+              "legendFormat": "{{operation}}",
               "refId": "A"
             }
           ]
         },
         {
           "id": 8,
-          "title": "5xx Rate by Route",
+          "title": "Request Rate vs Error Rate (overall)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
-            {
-              "expr": "sum(rate(http_server_requests_milliseconds_count{uri!~\"/actuator.*\",outcome=\"SERVER_ERROR\"}[5m])) by (uri)",
-              "legendFormat": "{{uri}}",
-              "refId": "A"
-            }
+            { "expr": "sum(rate(graphql_requests_total[5m]))", "legendFormat": "requests", "refId": "A" },
+            { "expr": "sum(rate(graphql_errors_total[5m]))", "legendFormat": "errors", "refId": "B" }
           ]
         },
         {
           "id": 9,
-          "title": "Latency by Route (p95)",
+          "title": "Latency by Operation (p95)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_milliseconds_bucket{uri!~\"/actuator.*\"}[5m])) by (le, uri))",
-              "legendFormat": "{{uri}}",
+              "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le, operation))",
+              "legendFormat": "{{operation}}",
               "refId": "A"
             }
           ]
         },
         {
           "id": 10,
-          "title": "DB Connection Pool Utilization (HikariCP)",
+          "title": "DB Connection Pool Utilization (Prisma)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(hikaricp_connections_active)", "legendFormat": "active", "refId": "A" },
-            { "expr": "sum(hikaricp_connections_idle)", "legendFormat": "idle", "refId": "B" },
-            { "expr": "sum(hikaricp_connections_pending)", "legendFormat": "pending (waiting)", "refId": "C" },
-            { "expr": "sum(hikaricp_connections_max)", "legendFormat": "max (capacity)", "refId": "D" }
+            { "expr": "sum(prisma_pool_connections_busy)", "legendFormat": "busy", "refId": "A" },
+            { "expr": "sum(prisma_pool_connections_idle)", "legendFormat": "idle", "refId": "B" },
+            { "expr": "sum(prisma_pool_connections_open)", "legendFormat": "open (capacity)", "refId": "C" }
           ]
         },
         {
           "id": 11,
-          "title": "DB Connection Acquire Wait (p95)",
+          "title": "DB Query / Pool Wait Time (avg)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
-            {
-              "expr": "histogram_quantile(0.95, sum(rate(hikaricp_connections_acquire_milliseconds_bucket[5m])) by (le))",
-              "refId": "A"
-            }
+            { "expr": "prisma_client_queries_duration_avg_ms", "legendFormat": "query duration (avg)", "refId": "A" },
+            { "expr": "prisma_client_queries_wait_avg_ms", "legendFormat": "pool wait (avg)", "refId": "B" }
           ]
         },
         {

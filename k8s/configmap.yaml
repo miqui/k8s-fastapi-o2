@@ -5,8 +5,6 @@ metadata:
   labels:
     app: message-service
 data:
-  SPRING_PROFILES_ACTIVE: "kubernetes"
-  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,metrics"
   DB_HOST: "postgres"
   DB_PORT: "5432"
   DB_NAME: "messagedb"
