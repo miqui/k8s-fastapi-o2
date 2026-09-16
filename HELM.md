@@ -1,7 +1,7 @@
-# Helm Commands — OpenObserve Observability Rollout
+# Helm Commands — OpenObserve & Headlamp Rollout
 
-`helm` commands used while adding OpenObserve (and its supporting configuration) as an
-observability backend for the message REST API, grouped by phase.
+`helm` commands used while adding OpenObserve (an observability backend) and Headlamp (a
+Kubernetes dashboard), plus their supporting configuration, grouped by phase.
 
 ## Chart discovery (finding the right chart/repo before using it)
 
@@ -31,10 +31,34 @@ helm upgrade --install openobserve openobserve/openobserve-standalone \
   --wait --timeout 180s
 ```
 
+## Chart discovery — Headlamp
+
+```bash
+helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
+helm repo update headlamp
+helm show values headlamp/headlamp --version 0.45.0
+```
+
+## From `deploy-kind.sh` — Headlamp
+
+```bash
+if ! helm repo list | grep -q '^headlamp[[:space:]]'; then
+  helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
+fi
+helm repo update headlamp
+helm upgrade --install headlamp headlamp/headlamp \
+  --version 0.45.0 \
+  --namespace headlamp \
+  --create-namespace \
+  -f k8s/headlamp/headlamp-values.yaml \
+  --wait --timeout 120s
+```
+
 ## Manual verification
 
 ```bash
 helm list -n observability
+helm list -n headlamp
 ```
 
 ## Manual re-applies after values changes

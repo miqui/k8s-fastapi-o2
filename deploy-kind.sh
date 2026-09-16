@@ -88,6 +88,21 @@ helm upgrade --install openobserve openobserve/openobserve-standalone \
   "${HELM_AUTH_ARGS[@]}" \
   --wait --timeout 180s
 
+# 6c. Install Headlamp (https://headlamp.dev/ - general-purpose Kubernetes dashboard,
+#     its own "headlamp" namespace, unrelated to the message-service metrics stack above).
+echo "=> Installing Headlamp (Kubernetes dashboard)..."
+if ! helm repo list | grep -q '^headlamp[[:space:]]'; then
+  helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/
+fi
+helm repo update headlamp
+
+helm upgrade --install headlamp headlamp/headlamp \
+  --version 0.45.0 \
+  --namespace headlamp \
+  --create-namespace \
+  -f k8s/headlamp/headlamp-values.yaml \
+  --wait --timeout 120s
+
 # 7. Apply Kubernetes manifests
 echo "=> Applying Kubernetes manifests..."
 kubectl apply -k k8s/
@@ -116,6 +131,7 @@ kubectl rollout status deployment/otel-collector -n observability --timeout=120s
 kubectl rollout status deployment/prometheus -n observability --timeout=120s
 kubectl rollout status deployment/grafana -n observability --timeout=120s
 kubectl rollout status statefulset/openobserve -n observability --timeout=180s
+kubectl rollout status deployment/headlamp -n headlamp --timeout=120s
 
 # 10. Wait for API rollout
 echo "=> Waiting for Deployment to be ready..."
@@ -140,6 +156,9 @@ kubectl get svc message-service
 echo ""
 echo "==================== Observability Pods ================="
 kubectl get pods -n observability -o wide
+echo ""
+echo "==================== Headlamp Pod ========================"
+kubectl get pods -n headlamp -o wide
 
 echo ""
 echo "=========================================================="
@@ -147,4 +166,5 @@ echo " Service is accessible at: http://localhost/api/messages"
 echo " Actuator Health:          http://localhost/actuator/health"
 echo " Grafana:                  http://grafana.localhost/ (credentials from 1Password / Secret)"
 echo " OpenObserve:              http://openobserve.localhost/ (credentials from 1Password / Secret)"
+echo " Headlamp:                 http://headlamp.localhost/ (login token: kubectl create token headlamp -n headlamp --duration=24h)"
 echo "=========================================================="
