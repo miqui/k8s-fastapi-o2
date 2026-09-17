@@ -13,6 +13,28 @@ command -v docker >/dev/null 2>&1 || { echo "Error: docker is required."; exit 1
 command -v kind >/dev/null 2>&1 || { echo "Error: kind is required."; exit 1; }
 command -v kubectl >/dev/null 2>&1 || { echo "Error: kubectl is required."; exit 1; }
 command -v helm >/dev/null 2>&1 || { echo "Error: helm is required."; exit 1; }
+command -v op >/dev/null 2>&1 || { echo "Error: 1Password CLI (op) is required. Install it, then run: op run --env-file=.env -- ./deploy-kind.sh"; exit 1; }
+
+# 1a. Check 1Password CLI readiness. This must run via 'op run --env-file=.env -- ./deploy-kind.sh'
+#     so PostgreSQL/Grafana/OpenObserve credentials are real secrets, not the invalid
+#     placeholder values baked into k8s/observability/openobserve-values.yaml (that
+#     placeholder previously reached OpenObserve unresolved and made it panic on boot,
+#     crash-looping for ~20 minutes before helm's --wait timeout aborted the whole script).
+echo "=> Checking 1Password CLI readiness..."
+op whoami >/dev/null 2>&1 || { echo "Error: 1Password CLI (op) is not signed in. Run 'op signin', then re-run: op run --env-file=.env -- ./deploy-kind.sh"; exit 1; }
+
+REQUIRED_SECRET_VARS=(DB_USER DB_PASSWORD POSTGRES_USER POSTGRES_PASSWORD GF_SECURITY_ADMIN_USER GF_SECURITY_ADMIN_PASSWORD ZO_ROOT_USER_EMAIL ZO_ROOT_USER_PASSWORD)
+MISSING_SECRET_VARS=()
+for var in "${REQUIRED_SECRET_VARS[@]}"; do
+  [ -n "${!var:-}" ] || MISSING_SECRET_VARS+=("${var}")
+done
+if [ "${#MISSING_SECRET_VARS[@]}" -gt 0 ]; then
+  echo "Error: missing required secret(s): ${MISSING_SECRET_VARS[*]}."
+  echo "       This script must be run via: op run --env-file=.env -- ./deploy-kind.sh"
+  echo "       (copy .env.example to .env and fill in your op://<vault>/<item>/<field> URIs first)"
+  exit 1
+fi
+echo "=> 1Password CLI is signed in and all required secrets are present."
 
 # 2. Check / Create Kind cluster (1 control-plane, 2 API workers, 1 DB worker,
 #    1 observability worker, 1 cache worker, 1 OpenObserve worker)
@@ -59,22 +81,18 @@ kind load docker-image "${IMAGE_NAME}" --name "${CLUSTER_NAME}"
 echo "=> Applying observability stack manifests..."
 kubectl apply -k k8s/observability/
 
-# 6a. Inject observability secrets from environment (e.g. op run)
+# 6a. Inject observability secrets from environment (via op run)
 echo "=> Configuring observability secrets..."
-if [ -n "${GF_SECURITY_ADMIN_USER:-}" ] || [ -n "${GF_SECURITY_ADMIN_PASSWORD:-}" ]; then
-  kubectl create secret generic grafana-credentials \
-    --namespace observability \
-    --from-literal=GF_SECURITY_ADMIN_USER="${GF_SECURITY_ADMIN_USER:-${GF_ADMIN_USER:-admin}}" \
-    --from-literal=GF_SECURITY_ADMIN_PASSWORD="${GF_SECURITY_ADMIN_PASSWORD:-${GF_ADMIN_PASSWORD:-admin}}" \
-    --dry-run=client -o yaml | kubectl apply -f -
-fi
+kubectl create secret generic grafana-credentials \
+  --namespace observability \
+  --from-literal=GF_SECURITY_ADMIN_USER="${GF_SECURITY_ADMIN_USER}" \
+  --from-literal=GF_SECURITY_ADMIN_PASSWORD="${GF_SECURITY_ADMIN_PASSWORD}" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
-if [ -n "${ZO_ROOT_USER_PASSWORD:-}" ] || [ -n "${ZO_PASSWORD:-}" ]; then
-  kubectl create secret generic openobserve-remote-write-credentials \
-    --namespace observability \
-    --from-literal=password="${ZO_ROOT_USER_PASSWORD:-${ZO_PASSWORD:-YOUR_OPENOBSERVE_ROOT_PASSWORD}}" \
-    --dry-run=client -o yaml | kubectl apply -f -
-fi
+kubectl create secret generic openobserve-remote-write-credentials \
+  --namespace observability \
+  --from-literal=password="${ZO_ROOT_USER_PASSWORD}" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 # 6b. Install OpenObserve (openobserve-standalone chart - single node, not the HA chart).
 #     Prometheus (deployed above) remote_writes every scraped series, including the
@@ -85,19 +103,12 @@ if ! helm repo list | grep -q '^openobserve[[:space:]]'; then
 fi
 helm repo update openobserve
 
-HELM_AUTH_ARGS=()
-if [ -n "${ZO_ROOT_USER_EMAIL:-}" ] || [ -n "${ZO_EMAIL:-}" ]; then
-  HELM_AUTH_ARGS+=(--set "auth.ZO_ROOT_USER_EMAIL=${ZO_ROOT_USER_EMAIL:-${ZO_EMAIL:-YOUR_OPENOBSERVE_ROOT_EMAIL}}")
-fi
-if [ -n "${ZO_ROOT_USER_PASSWORD:-}" ] || [ -n "${ZO_PASSWORD:-}" ]; then
-  HELM_AUTH_ARGS+=(--set "auth.ZO_ROOT_USER_PASSWORD=${ZO_ROOT_USER_PASSWORD:-${ZO_PASSWORD:-YOUR_OPENOBSERVE_ROOT_PASSWORD}}")
-fi
-
 helm upgrade --install openobserve openobserve/openobserve-standalone \
   --version 0.92.2 \
   --namespace observability \
   -f k8s/observability/openobserve-values.yaml \
-  "${HELM_AUTH_ARGS[@]}" \
+  --set "auth.ZO_ROOT_USER_EMAIL=${ZO_ROOT_USER_EMAIL}" \
+  --set "auth.ZO_ROOT_USER_PASSWORD=${ZO_ROOT_USER_PASSWORD}" \
   --wait --timeout 180s
 
 # 6c. Install Headlamp (https://headlamp.dev/ - general-purpose Kubernetes dashboard,
@@ -119,17 +130,15 @@ helm upgrade --install headlamp headlamp/headlamp \
 echo "=> Applying Kubernetes manifests..."
 kubectl apply -k k8s/
 
-# 7a. Inject database secrets from environment (e.g. op run)
-if [ -n "${DB_USER:-}" ] || [ -n "${DB_PASSWORD:-}" ] || [ -n "${POSTGRES_USER:-}" ] || [ -n "${POSTGRES_PASSWORD:-}" ]; then
-  echo "=> Configuring PostgreSQL database credentials from environment..."
-  kubectl create secret generic postgres-credentials \
-    --namespace default \
-    --from-literal=DB_USER="${DB_USER:-YOUR_POSTGRES_DB_USER}" \
-    --from-literal=DB_PASSWORD="${DB_PASSWORD:-YOUR_POSTGRES_DB_PASSWORD}" \
-    --from-literal=POSTGRES_USER="${POSTGRES_USER:-${DB_USER:-YOUR_POSTGRES_USER}}" \
-    --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-${DB_PASSWORD:-YOUR_POSTGRES_PASSWORD}}" \
-    --dry-run=client -o yaml | kubectl apply -f -
-fi
+# 7a. Inject database secrets from environment (via op run)
+echo "=> Configuring PostgreSQL database credentials from environment..."
+kubectl create secret generic postgres-credentials \
+  --namespace default \
+  --from-literal=DB_USER="${DB_USER}" \
+  --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
+  --from-literal=POSTGRES_USER="${POSTGRES_USER}" \
+  --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 # 8. Wait for PostgreSQL and Hazelcast to be ready before the API rolls out
 echo "=> Waiting for PostgreSQL StatefulSet to be ready..."
