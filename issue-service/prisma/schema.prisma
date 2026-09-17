@@ -1,0 +1,99 @@
+// Prisma schema for the issue-service GraphQL API (Jira-lite issue tracker).
+//
+// Lives in its own PostgreSQL database ("issuedb") on the same shared Postgres
+// StatefulSet message-service uses - see k8s/postgres-init-configmap.yaml, which
+// creates it alongside the "messagedb" the official postgres image bootstraps via
+// POSTGRES_DB. `metrics` enables prisma.$metrics.json(), sampled in
+// src/telemetry.ts, same as message-service.
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["metrics"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IssueStatus {
+  BACKLOG
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Workspace {
+  id        String    @id @default(uuid())
+  createdAt DateTime  @default(now()) @map("created_at")
+  name      String    @db.VarChar(100)
+  projects  Project[]
+
+  @@map("workspaces")
+}
+
+model Project {
+  id          String    @id @default(uuid())
+  createdAt   DateTime  @default(now()) @map("created_at")
+  key         String    @db.VarChar(10)
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  issues      Issue[]
+  labels      Label[]
+
+  // Issue keys (e.g. "ENG-42") are unique per project, not globally, so the
+  // project's short key only needs to be unique within its own workspace.
+  @@unique([workspaceId, key])
+  @@map("projects")
+}
+
+model Issue {
+  id        String      @id @default(uuid())
+  createdAt DateTime    @default(now()) @map("created_at")
+  title     String      @db.VarChar(200)
+  status    IssueStatus @default(BACKLOG)
+  priority  Priority    @default(MEDIUM)
+  assignee  String?     @db.VarChar(100)
+  projectId String      @map("project_id")
+  project   Project     @relation(fields: [projectId], references: [id])
+  labels    Label[]
+  comments  Comment[]
+
+  // Matches issuesByStatus-style board views grouping/filtering by status per project.
+  @@index([projectId, status])
+  @@map("issues")
+}
+
+model Label {
+  id        String  @id @default(uuid())
+  name      String  @db.VarChar(50)
+  color     String  @db.VarChar(7)
+  projectId String  @map("project_id")
+  project   Project @relation(fields: [projectId], references: [id])
+  issues    Issue[]
+
+  @@unique([projectId, name])
+  @@map("labels")
+}
+
+model Comment {
+  id        String    @id @default(uuid())
+  createdAt DateTime  @default(now()) @map("created_at")
+  body      String    @db.VarChar(2000)
+  author    String    @db.VarChar(100)
+  issueId   String    @map("issue_id")
+  issue     Issue     @relation(fields: [issueId], references: [id])
+  parentId  String?   @map("parent_id")
+  parent    Comment?  @relation("CommentReplies", fields: [parentId], references: [id])
+  replies   Comment[] @relation("CommentReplies")
+
+  @@index([issueId])
+  @@map("comments")
+}

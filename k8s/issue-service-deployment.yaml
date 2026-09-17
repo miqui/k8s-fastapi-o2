@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: issue-service
+  labels:
+    app: issue-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: issue-service
+  template:
+    metadata:
+      labels:
+        app: issue-service
+    spec:
+      nodeSelector:
+        workload: api
+      initContainers:
+        # Same shared postgres pod message-service waits on. Note pg_isready only
+        # checks that the server is accepting connections, not that the "issuedb"
+        # database itself exists yet (verified: it reports ready even for a database
+        # name that doesn't exist) - issuedb is created once, on first PGDATA init,
+        # by k8s/postgres-init-configmap.yaml, before postgres starts accepting
+        # connections at all, so that ordering is not a concern here.
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          envFrom:
+            - configMapRef:
+                name: issue-service-config
+            - secretRef:
+                name: postgres-credentials
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME"; do
+                echo "Waiting for postgres at $DB_HOST:$DB_PORT/$DB_NAME..."
+                sleep 2
+              done
+      containers:
+        - name: issue-service
+          image: issue-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: issue-service-config
+            - secretRef:
+                name: postgres-credentials
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1024Mi"
+          startupProbe:
+            httpGet:
+              path: /health/liveness
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - issue-service
+                topologyKey: "kubernetes.io/hostname"

@@ -9,6 +9,12 @@ kept as the local `java-origin` git remote for reference — see [Git history](#
 Everything below the application layer — PostgreSQL, the standalone Hazelcast cache member, the kind
 cluster topology, ingress, and the full observability stack — is unchanged from that sibling project.
 
+This repo also hosts a second, independent GraphQL API alongside this one: **issue-service**
+(`issue-service/`), a Jira-lite issue tracker with a more complex schema (nested relations, enums,
+threaded comments, cursor pagination). Same stack (Apollo Server + Prisma + Express), same kind
+cluster, its own Deployment/Service/HPA/Ingress and its own database on the shared Postgres instance
+— see [Issue Service](#issue-service-second-graphql-api) below.
+
 ## Architecture
 
 - **API**: Apollo Server (`src/schema.ts` typeDefs) -> resolvers (`src/resolvers.ts`) -> Prisma Client
@@ -56,7 +62,9 @@ cluster topology, ingress, and the full observability stack — is unchanged fro
   (see [kind's Ingress guide](https://kind.sigs.k8s.io/docs/user/ingress/)). `deploy-kind.sh` installs
   the ingress-nginx controller, and `k8s/ingress.yaml` routes all paths to `message-service`
   (a plain `ClusterIP` Service — no NodePort). The API is reachable at `http://localhost/graphql` with
-  no port number and no `kubectl port-forward` needed.
+  no port number and no `kubectl port-forward` needed. `issue-service` has its own `Ingress`
+  (`k8s/issue-service-ingress.yaml`) routing `/issues/*` to it instead - see
+  [Issue Service](#issue-service-second-graphql-api) below.
 - **Observability** (`k8s/observability/`, namespace `observability`): the app pushes metrics as OTLP
   (`@opentelemetry/sdk-metrics` + `@opentelemetry/exporter-metrics-otlp-http`, see `src/telemetry.ts`)
   to an **OpenTelemetry Collector** (`otel-collector`, `otel/opentelemetry-collector-contrib`), which
@@ -93,6 +101,62 @@ cluster topology, ingress, and the full observability stack — is unchanged fro
   `kube-state-metrics`, and `kubernetes-nodes-cadvisor` (the same three jobs behind the "kind cluster
   ops" Grafana dashboard) - not every job Prometheus scrapes. See `PROMETHEUS.md` for why (an earlier
   attempt at forwarding everything unfiltered overflowed OpenObserve's single-node in-memory MemTable).
+
+## Issue Service (second GraphQL API)
+
+`issue-service/` is a second, fully independent GraphQL API in this same repo - same stack
+(Apollo Server + Prisma + Express + TypeScript), deployed to the same kind cluster, but its own
+npm package, own Prisma schema, own Docker image, and own set of Kubernetes manifests. It exists to
+demonstrate hosting more than one GraphQL API on this stack side by side.
+
+- **Domain**: a Jira-lite issue tracker - `Workspace` → `Project` → `Issue`, with `Label`s
+  (many-to-many with `Issue`) and threaded `Comment`s (self-referential `parent`/`replies`). See
+  `issue-service/prisma/schema.prisma` and `issue-service/src/schema.ts`. Compared to
+  message-service's `Author`/`Message` model, this schema is intentionally more complex: a `Node`
+  interface, two enums (`IssueStatus`, `Priority`), a self-relation, an implicit many-to-many, and
+  Relay-style cursor pagination (`IssueConnection`/`IssueEdge`/`PageInfo`) on `Project.issues`
+  instead of message-service's offset pagination.
+- **Database**: its own `issuedb` database on the *same* shared Postgres StatefulSet message-service
+  uses, rather than a second Postgres instance - `k8s/postgres-init-configmap.yaml` mounts a
+  `CREATE DATABASE issuedb;` script into `/docker-entrypoint-initdb.d` alongside the `messagedb`
+  the official postgres image already bootstraps via `POSTGRES_DB` (see
+  `k8s/postgres-config` in `k8s/configmap.yaml`). Both databases are owned by the same
+  `postgres-credentials` user - simplest option for a disposable local cluster; a real deployment
+  would likely give each service its own database credentials.
+- **No cache**: unlike message-service, issue-service does not connect to Hazelcast. Hazelcast here
+  is a purpose-built read-through/write-through cache for one hot path
+  (`getMessageById`/`evictCachedMessage` in message-service's `src/cache.ts`) - nothing in
+  issue-service's resolvers has an equivalent proven hot path yet, so requiring Hazelcast readiness
+  without using it would just add a dependency for no benefit. It can be added the same way later if
+  a resolver needs it.
+- **Kubernetes**: a fully separate `Deployment`/`Service`/`HorizontalPodAutoscaler` (mirroring
+  message-service's, minus the `wait-for-hazelcast` init container), pinned to the same
+  `workload=api` nodes -
+  `k8s/issue-service-deployment.yaml`, `k8s/issue-service-service.yaml`, `k8s/issue-service-hpa.yaml`.
+  This means it scales and rolls out independently of message-service; a crash in one doesn't affect
+  the other.
+- **Ingress**: a separate `Ingress` object, `k8s/issue-service-ingress.yaml`, routing
+  `http://localhost/issues/*` to it. It's a separate `Ingress` resource (not a second path on
+  `k8s/ingress.yaml`) because `nginx.ingress.kubernetes.io/rewrite-target` applies to the whole
+  Ingress object, not per-path, and it strips the `/issues` prefix before forwarding
+  (`nginx.ingress.kubernetes.io/rewrite-target: /$2` against path regex `/issues(/|$)(.*)`) so the
+  app itself still mounts plain `/graphql` and `/health/*` routes, same as message-service. The
+  GraphQL endpoint is `http://localhost/issues/graphql`.
+- **Observability**: pushes the same OTLP metrics as message-service to the same OTel Collector
+  (`src/telemetry.ts`), tagged with `service.name = "issue-service"` so Prometheus/Grafana can tell
+  the two APIs' series apart - it isn't wired into the pre-built Grafana dashboards (those are
+  scoped to message-service's metrics), but the raw series are there to query/graph.
+- **Local dev**: same pattern as message-service -
+  ```bash
+  cd issue-service
+  npm install
+  DATABASE_URL=postgresql://issue_app:issue_app@localhost:5432/issuedb npm run prisma:migrate:deploy
+  npm run build
+  npm start
+  ```
+  or `npm run dev` for auto-reload. `deploy-kind.sh` builds and loads both `message-service:latest`
+  and `issue-service:latest` images and waits on both Deployments' rollouts; `kubectl apply -k k8s/`
+  applies both services' manifests together.
 
 ## Git history
 
@@ -166,16 +230,21 @@ runs, via Prisma's own postinstall hook).
     worker, 1 cache worker, 1 OpenObserve worker) if it doesn't exist yet.
   - Installs the ingress-nginx controller and waits for it to become ready.
   - Installs metrics-server (patched with `--kubelet-insecure-tls`) and waits for it to become ready -
-    required for the `message-service` `HorizontalPodAutoscaler` to read CPU/memory usage.
-  - Builds the `message-service:latest` image and loads it into the cluster.
+    required for the `message-service` and `issue-service` `HorizontalPodAutoscaler`s to read
+    CPU/memory usage.
+  - Builds the `message-service:latest` and `issue-service:latest` images and loads both into the
+    cluster.
   - Applies `k8s/observability/` (OTel Collector, Prometheus, Grafana - see Architecture above), dynamically injects observability secrets from environment, then
     installs OpenObserve via Helm (`openobserve/openobserve-standalone` - see Architecture above)
     and Headlamp via Helm (`headlamp/headlamp` - see Architecture above).
   - Applies `k8s/` via Kustomize: `Secret` + `ConfigMap`s, dynamically injects PostgreSQL database credentials from environment, the `postgres` `StatefulSet`/headless
-    `Service`, the `hazelcast` `Deployment`/`Service`, the `message-service` `Deployment`/`Service`
-    (`ClusterIP`)/`HorizontalPodAutoscaler`, and an `Ingress` routing to it.
-  - Waits for PostgreSQL and Hazelcast to become ready before waiting on the API rollout (the API
-    Deployment also runs `wait-for-postgres` and `wait-for-hazelcast` init containers).
+    `Service` (with an init script creating the `issuedb` database alongside `messagedb` - see
+    [Issue Service](#issue-service-second-graphql-api) above), the `hazelcast` `Deployment`/`Service`,
+    and, for each of `message-service`/`issue-service`, a `Deployment`/`Service`
+    (`ClusterIP`)/`HorizontalPodAutoscaler` and its own `Ingress`.
+  - Waits for PostgreSQL and Hazelcast to become ready before waiting on both APIs' rollouts (the
+    `message-service` Deployment runs `wait-for-postgres` and `wait-for-hazelcast` init containers;
+    `issue-service` only `wait-for-postgres`, since it has no cache dependency).
 - **Tear down cluster**: `./teardown-kind.sh`
 - **Test endpoints**: `./test-api.sh`
 

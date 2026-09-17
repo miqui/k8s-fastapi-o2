@@ -43,6 +43,8 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+            - name: postgres-init
+              mountPath: /docker-entrypoint-initdb.d
           resources:
             requests:
               cpu: "250m"
@@ -50,22 +52,30 @@ spec:
             limits:
               cpu: "1000m"
               memory: "512Mi"
+          # Wrapped in `sh -c` so $DB_USER/$POSTGRES_DB actually expand via real shell
+          # substitution - a bare exec.command (no shell) never expands Kubernetes'
+          # $(VAR) syntax, which only applies to a container's own command/args, not
+          # probe commands. Without the shell, pg_isready received the literal string
+          # "$(DB_USER)" as a role name, which Postgres correctly logged as a FATAL
+          # "role does not exist" on every single probe tick - harmless (pg_isready
+          # still reports "accepting connections" and exit 0 regardless of the role
+          # name given), but noisy, misleading log spam since the first deploy.
           startupProbe:
             exec:
-              command: ["pg_isready", "-U", "$(DB_USER)", "-d", "$(POSTGRES_DB)"]
+              command: ["sh", "-c", "pg_isready -U \"$DB_USER\" -d \"$POSTGRES_DB\""]
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 12
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "$(DB_USER)", "-d", "$(POSTGRES_DB)"]
+              command: ["sh", "-c", "pg_isready -U \"$DB_USER\" -d \"$POSTGRES_DB\""]
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "$(DB_USER)", "-d", "$(POSTGRES_DB)"]
+              command: ["sh", "-c", "pg_isready -U \"$DB_USER\" -d \"$POSTGRES_DB\""]
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
@@ -114,6 +124,10 @@ spec:
               port: 9187
             initialDelaySeconds: 10
             periodSeconds: 15
+      volumes:
+        - name: postgres-init
+          configMap:
+            name: postgres-init
   volumeClaimTemplates:
     - metadata:
         name: postgres-data

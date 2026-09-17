@@ -3,6 +3,7 @@ set -eo pipefail
 
 CLUSTER_NAME="kind-graphql-prisma-cluster"
 IMAGE_NAME="message-service:latest"
+ISSUE_SERVICE_IMAGE_NAME="issue-service:latest"
 
 echo "=========================================================="
 echo " GraphQL (Apollo Server) + Prisma + PostgreSQL - Kind Deploy"
@@ -69,13 +70,17 @@ kubectl wait --namespace kube-system \
   --for=condition=available deployment/metrics-server \
   --timeout=120s
 
-# 4. Build Docker image
+# 4. Build Docker images
 echo "=> Building Docker image '${IMAGE_NAME}'..."
 docker build -t "${IMAGE_NAME}" .
+echo "=> Building Docker image '${ISSUE_SERVICE_IMAGE_NAME}'..."
+docker build -t "${ISSUE_SERVICE_IMAGE_NAME}" issue-service/
 
-# 5. Load Docker image into kind nodes
+# 5. Load Docker images into kind nodes
 echo "=> Loading '${IMAGE_NAME}' into kind cluster..."
 kind load docker-image "${IMAGE_NAME}" --name "${CLUSTER_NAME}"
+echo "=> Loading '${ISSUE_SERVICE_IMAGE_NAME}' into kind cluster..."
+kind load docker-image "${ISSUE_SERVICE_IMAGE_NAME}" --name "${CLUSTER_NAME}"
 
 # 6. Apply the observability stack (OTel Collector, Prometheus, Grafana, OpenObserve)
 echo "=> Applying observability stack manifests..."
@@ -154,9 +159,10 @@ kubectl rollout status deployment/grafana -n observability --timeout=120s
 kubectl rollout status statefulset/openobserve -n observability --timeout=180s
 kubectl rollout status deployment/headlamp -n headlamp --timeout=120s
 
-# 10. Wait for API rollout
-echo "=> Waiting for Deployment to be ready..."
+# 10. Wait for API rollouts
+echo "=> Waiting for Deployments to be ready..."
 kubectl rollout status deployment/message-service --timeout=180s
+kubectl rollout status deployment/issue-service --timeout=180s
 
 # 11. Cluster & Pod overview
 echo ""
@@ -175,6 +181,12 @@ echo ""
 echo "==================== Application Service ================"
 kubectl get svc message-service
 echo ""
+echo "==================== Issue Service Pods =================="
+kubectl get pods -l app=issue-service -o wide
+echo ""
+echo "==================== Issue Service ======================="
+kubectl get svc issue-service
+echo ""
 echo "==================== Observability Pods ================="
 kubectl get pods -n observability -o wide
 echo ""
@@ -183,8 +195,10 @@ kubectl get pods -n headlamp -o wide
 
 echo ""
 echo "=========================================================="
-echo " GraphQL endpoint:         http://localhost/graphql"
-echo " Health:                   http://localhost/health/liveness"
+echo " message-service GraphQL:  http://localhost/graphql"
+echo " message-service health:   http://localhost/health/liveness"
+echo " issue-service GraphQL:    http://localhost/issues/graphql"
+echo " issue-service health:     http://localhost/issues/health/liveness"
 echo " Grafana:                  http://grafana.localhost/ (credentials from 1Password / Secret)"
 echo " OpenObserve:              http://openobserve.localhost/ (credentials from 1Password / Secret)"
 echo " Headlamp:                 http://headlamp.localhost/ (login token: kubectl create token headlamp -n headlamp --duration=24h)"

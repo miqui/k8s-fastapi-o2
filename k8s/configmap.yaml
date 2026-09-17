@@ -15,6 +15,18 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: issue-service-config
+  labels:
+    app: issue-service
+data:
+  DB_HOST: "postgres"
+  DB_PORT: "5432"
+  DB_NAME: "issuedb"
+  OTEL_METRICS_URL: "http://otel-collector.observability.svc.cluster.local:4318/v1/metrics"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: postgres-config
   labels:
     app: postgres
