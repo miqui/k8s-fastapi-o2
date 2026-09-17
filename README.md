@@ -155,7 +155,7 @@ runs, via Prisma's own postinstall hook).
 ## Deployment with Kind / Kubernetes
 
 - **Deploy to local Kind cluster**: requires the [1Password CLI](https://developer.1password.com/docs/cli/) (`op`),
-  installed and signed in (`op signin`) - `deploy-kind.sh` checks both and fails fast otherwise, since
+  installed and signed in (`eval $(op signin)`) - `deploy-kind.sh` checks both and fails fast otherwise, since
   PostgreSQL/Grafana/OpenObserve credentials all come from it and there's no valid fallback.
     ```bash
     cp .env.example .env

@@ -21,7 +21,7 @@ command -v op >/dev/null 2>&1 || { echo "Error: 1Password CLI (op) is required. 
 #     placeholder previously reached OpenObserve unresolved and made it panic on boot,
 #     crash-looping for ~20 minutes before helm's --wait timeout aborted the whole script).
 echo "=> Checking 1Password CLI readiness..."
-op whoami >/dev/null 2>&1 || { echo "Error: 1Password CLI (op) is not signed in. Run 'op signin', then re-run: op run --env-file=.env -- ./deploy-kind.sh"; exit 1; }
+op whoami >/dev/null 2>&1 || { echo "Error: 1Password CLI (op) is not signed in. Run 'eval \$(op signin)', then re-run: op run --env-file=.env -- ./deploy-kind.sh"; exit 1; }
 
 REQUIRED_SECRET_VARS=(DB_USER DB_PASSWORD POSTGRES_USER POSTGRES_PASSWORD GF_SECURITY_ADMIN_USER GF_SECURITY_ADMIN_PASSWORD ZO_ROOT_USER_EMAIL ZO_ROOT_USER_PASSWORD)
 MISSING_SECRET_VARS=()
