@@ -1,0 +1,27 @@
+# Separate Ingress object (rather than a second rule on k8s/ingress.yaml) because
+# nginx.ingress.kubernetes.io/rewrite-target applies to the whole Ingress resource,
+# not per-path - message-service's "/" catch-all must not be rewritten.
+#
+# The regex capture group ($2) strips the "/issues" prefix before forwarding, so the
+# app itself still mounts routes at the plain "/graphql" / "/health/*" paths it would
+# use standalone, same as message-service.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: issue-service
+  labels:
+    app: issue-service
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /issues(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: issue-service
+                port:
+                  number: 8080
