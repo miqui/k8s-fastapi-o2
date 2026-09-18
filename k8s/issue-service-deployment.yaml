@@ -25,6 +25,13 @@ spec:
         # connections at all, so that ordering is not a concern here.
         - name: wait-for-postgres
           image: postgres:16-alpine
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "16Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
           envFrom:
             - configMapRef:
                 name: issue-service-config
