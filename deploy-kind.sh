@@ -22,7 +22,7 @@ command -v op >/dev/null 2>&1 || { echo "Error: 1Password CLI (op) is required. 
 echo "=> Checking 1Password CLI readiness..."
 op whoami >/dev/null 2>&1 || { echo "Error: 1Password CLI (op) is not signed in. Run 'eval \$(op signin)', then re-run: op run --env-file=.env -- ./deploy-kind.sh"; exit 1; }
 
-REQUIRED_SECRET_VARS=(DB_USER DB_PASSWORD POSTGRES_USER POSTGRES_PASSWORD GF_SECURITY_ADMIN_USER GF_SECURITY_ADMIN_PASSWORD ZO_ROOT_USER_EMAIL ZO_ROOT_USER_PASSWORD DOCKERHUB_USERNAME DOCKERHUB_TOKEN_RO GITHUB_USERNAME GITHUB_TOKEN_RO)
+REQUIRED_SECRET_VARS=(DB_USER DB_PASSWORD POSTGRES_USER POSTGRES_PASSWORD GF_SECURITY_ADMIN_USER GF_SECURITY_ADMIN_PASSWORD ZO_ROOT_USER_EMAIL ZO_ROOT_USER_PASSWORD DOCKERHUB_USERNAME DOCKERHUB_TOKEN_RO)
 MISSING_SECRET_VARS=()
 for var in "${REQUIRED_SECRET_VARS[@]}"; do
   [ -n "${!var:-}" ] || MISSING_SECRET_VARS+=("${var}")
@@ -108,21 +108,7 @@ kubectl create secret docker-registry dockerhub-image-updater-creds \
   --docker-password="${DOCKERHUB_TOKEN_RO}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# 4b. Read-only credential for ArgoCD to clone this (private) GitHub repo. A fine-grained
-#     personal access token scoped to this one repository with "Contents: read-only" - it never
-#     needs write access, since Image Updater's argocd write-back method doesn't commit to git.
-echo "=> Configuring ArgoCD's read-only GitHub repository credential..."
-kubectl create secret generic repo-graphql-apollo-prisma-o2 \
-  --namespace argocd \
-  --from-literal=type=git \
-  --from-literal=url=https://github.com/miqui/k8s-graphql-apollo-prisma-o2.git \
-  --from-literal=username="${GITHUB_USERNAME}" \
-  --from-literal=password="${GITHUB_TOKEN_RO}" \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl label secret repo-graphql-apollo-prisma-o2 --namespace argocd \
-  argocd.argoproj.io/secret-type=repository --overwrite
-
-# 4c. Expose the ArgoCD UI at http://argocd.localhost/
+# 4b. Expose the ArgoCD UI at http://argocd.localhost/
 kubectl apply -f k8s/argocd/ingress.yaml
 
 # 5. Apply the observability stack (OTel Collector, Prometheus, Grafana, OpenObserve)

@@ -139,10 +139,7 @@ plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take 
   issue-service/Ingress/ResourceQuota set `kubectl apply -k k8s/` used to apply directly.
   `syncPolicy.automated: { prune: true, selfHeal: true }` means any manifest change pushed to
   `main` (or drift corrected by hand in the live cluster) gets reconciled automatically. This repo
-  is **private**, so ArgoCD clones it with a read-only credential: a fine-grained GitHub personal
-  access token limited to this one repository with `Contents: Read-only`
-  (`GITHUB_USERNAME`/`GITHUB_TOKEN_RO`, injected by `deploy-kind.sh` from 1Password like every other
-  secret - see `.env.example`).
+  is public, so ArgoCD clones it anonymously - no repository credential is needed.
 - **Argo CD Image Updater** (v1.x, pinned to `v1.3.0` in `deploy-kind.sh`) is configured by an
   `ImageUpdater` custom resource (`k8s/argocd/image-updater.yaml`) - v1.x replaced v0.x's
   Application annotations with this CRD. It watches `docker.io/miqui/message-service` and
