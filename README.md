@@ -15,6 +15,22 @@ threaded comments, cursor pagination). Same stack (Apollo Server + Prisma + Expr
 cluster, its own Deployment/Service/HPA/Ingress and its own database on the shared Postgres instance
 — see [Issue Service](#issue-service-second-graphql-api) below.
 
+## Stack URLs
+
+Once `deploy-kind.sh` completes, the stack is reachable at (`*.localhost` resolves to `127.0.0.1`
+on macOS/most Linux out of the box — see [Deployment with Kind / Kubernetes](#deployment-with-kind--kubernetes)):
+
+| Component | URL | Notes |
+| --- | --- | --- |
+| message-service GraphQL | `http://localhost/graphql` | [Apollo Server](#graphql-api) |
+| message-service health | `http://localhost/health/liveness` | |
+| issue-service GraphQL | `http://localhost/issues/graphql` | see [Issue Service](#issue-service-second-graphql-api) |
+| issue-service health | `http://localhost/issues/health/liveness` | |
+| Grafana | `http://grafana.localhost/` | credentials via Secret / 1Password — see [Viewing metrics in Grafana](#viewing-metrics-in-grafana) |
+| OpenObserve | `http://openobserve.localhost/` | credentials via Secret / 1Password |
+| Headlamp | `http://headlamp.localhost/` | Kubernetes dashboard; login needs a bearer token, see [Headlamp](#viewing-metrics-in-grafana) |
+| Prometheus | `http://localhost:9090` | not exposed via Ingress — `kubectl port-forward -n observability svc/prometheus 9090:9090` |
+
 ## Architecture
 
 - **API**: Apollo Server (`src/schema.ts` typeDefs) -> resolvers (`src/resolvers.ts`) -> Prisma Client
