@@ -29,6 +29,9 @@ jobs:
       - name: Build (typecheck)
         run: npm run build
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -50,6 +53,7 @@ jobs:
           context: issue-service
           file: issue-service/Dockerfile
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             docker.io/miqui/issue-service:${{ steps.meta.outputs.tag }}
             docker.io/miqui/issue-service:latest
