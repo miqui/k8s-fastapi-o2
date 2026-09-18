@@ -29,6 +29,7 @@ on macOS/most Linux out of the box — see [Deployment with Kind / Kubernetes](#
 | Grafana | `http://grafana.localhost/` | credentials via Secret / 1Password — see [Viewing metrics in Grafana](#viewing-metrics-in-grafana) |
 | OpenObserve | `http://openobserve.localhost/` | credentials via Secret / 1Password |
 | Headlamp | `http://headlamp.localhost/` | Kubernetes dashboard; login needs a bearer token, see [Headlamp](#viewing-metrics-in-grafana) |
+| ArgoCD | `http://argocd.localhost/` | GitOps sync UI; login is `admin` / see [Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd) |
 | Prometheus | `http://localhost:9090` | not exposed via Ingress — `kubectl port-forward -n observability svc/prometheus 9090:9090` |
 
 ## Architecture
@@ -118,6 +119,57 @@ on macOS/most Linux out of the box — see [Deployment with Kind / Kubernetes](#
   ops" Grafana dashboard) - not every job Prometheus scrapes. See `PROMETHEUS.md` for why (an earlier
   attempt at forwarding everything unfiltered overflowed OpenObserve's single-node in-memory MemTable).
 
+## Continuous Deployment with ArgoCD
+
+Both APIs are deployed via GitOps rather than the local build/load loop described in
+[Pushing a code change to the running cluster](#pushing-a-code-change-to-the-running-cluster):
+GitHub Actions builds and pushes images to Docker Hub, and [ArgoCD](https://argo-cd.readthedocs.io/)
+(`deploy-kind.sh` installs it into its own `argocd` namespace, exposed at `http://argocd.localhost/`)
+plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take it from there.
+
+- **CI** (`.github/workflows/message-service-ci.yml`, `issue-service-ci.yml`): on push to `main`,
+  path-filtered so a change to one service doesn't rebuild the other, each workflow runs `npm ci &&
+  npm run build` as a typecheck gate, then builds and pushes
+  `docker.io/miqui/message-service`/`issue-service`, tagged `<UTC yyyymmddHHMMSS>-<7-char sha>`
+  (e.g. `20260918140501-a1b2c3d`, sortable by build time yet traceable to a commit) plus a floating
+  `:latest`. Push credentials (`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`, a **read/write** Docker Hub
+  access token, not the account password) are GitHub Actions repository secrets, never committed.
+- **ArgoCD** owns one `Application` (`k8s/argocd/application.yaml`, `graphql-apollo-prisma-o2`)
+  whose source is this repo's `k8s/` Kustomization - the same Postgres/Hazelcast/message-service/
+  issue-service/Ingress/ResourceQuota set `kubectl apply -k k8s/` used to apply directly.
+  `syncPolicy.automated: { prune: true, selfHeal: true }` means any manifest change pushed to
+  `main` (or drift corrected by hand in the live cluster) gets reconciled automatically. This repo
+  is **private**, so ArgoCD clones it with a read-only credential: a fine-grained GitHub personal
+  access token limited to this one repository with `Contents: Read-only`
+  (`GITHUB_USERNAME`/`GITHUB_TOKEN_RO`, injected by `deploy-kind.sh` from 1Password like every other
+  secret - see `.env.example`).
+- **Argo CD Image Updater** (v1.x, pinned to `v1.3.0` in `deploy-kind.sh`) is configured by an
+  `ImageUpdater` custom resource (`k8s/argocd/image-updater.yaml`) - v1.x replaced v0.x's
+  Application annotations with this CRD. It watches `docker.io/miqui/message-service` and
+  `.../issue-service`, considers only tags matching `^[0-9]{14}-[0-9a-f]{7}$` (so never the
+  floating `:latest`), and picks the highest one with the `alphabetical` strategy - i.e. the newest
+  build, given the timestamp-prefixed tags. `newest-build` would be the obvious strategy but its
+  docs advise against it on Docker Hub: it fetches a manifest per tag to read creation dates, and
+  those count against pull limits. It polls with a **separate, read-only** Docker Hub token
+  (`DOCKERHUB_TOKEN_RO`, also from 1Password) so a compromised in-cluster credential can't push or
+  delete images. On finding a new tag it patches the `Application`'s Kustomize image override
+  directly (the default `argocd` write-back method, equivalent to `kustomize edit set image
+  message-service=docker.io/miqui/message-service:<tag>` - `manifestTargets.kustomize.name` maps
+  the Deployment specs' short image name onto it) - no git commits, so CI and Image Updater never
+  need push access to the GitHub repo at all.
+- **The `postgres-credentials` Secret is the one deliberate exception.** `k8s/secret.yaml` is a
+  committed placeholder (`YOUR_POSTGRES_DB_USER`, etc. - see its own comment); `deploy-kind.sh`
+  overwrites it in-cluster with real 1Password-sourced values right after the `Application`'s
+  first sync. Without an `ignoreDifferences` entry for it in `application.yaml`, ArgoCD's
+  `selfHeal` would treat that real Secret as drift from git and revert it back to the placeholder
+  on its next reconcile, breaking Postgres auth for anything that restarts afterward - the
+  `ignoreDifferences` block is what keeps ArgoCD managing everything else while leaving that one
+  Secret's live values alone.
+- **Login**: `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o
+  jsonpath='{.data.password}' | base64 -d` (same bearer-token-retrieval idiom as Headlamp above).
+  `argocd-server` is patched with `--insecure` so the plain-HTTP `*.localhost` Ingress pattern used
+  for Grafana/OpenObserve/Headlamp works here too, rather than needing TLS passthrough.
+
 ## Issue Service (second GraphQL API)
 
 `issue-service/` is a second, fully independent GraphQL API in this same repo - same stack
@@ -170,9 +222,10 @@ demonstrate hosting more than one GraphQL API on this stack side by side.
   npm run build
   npm start
   ```
-  or `npm run dev` for auto-reload. `deploy-kind.sh` builds and loads both `message-service:latest`
-  and `issue-service:latest` images and waits on both Deployments' rollouts; `kubectl apply -k k8s/`
-  applies both services' manifests together.
+  or `npm run dev` for auto-reload. Both services' Docker Hub images are built and pushed by their
+  own GitHub Actions workflow (see [Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd)),
+  and `deploy-kind.sh` registers a single ArgoCD `Application` that applies both services'
+  manifests together and waits on both Deployments' rollouts.
 
 ## Git history
 
@@ -236,7 +289,7 @@ runs, via Prisma's own postinstall hook).
 
 - **Deploy to local Kind cluster**: requires the [1Password CLI](https://developer.1password.com/docs/cli/) (`op`),
   installed and signed in (`eval $(op signin)`) - `deploy-kind.sh` checks both and fails fast otherwise, since
-  PostgreSQL/Grafana/OpenObserve credentials all come from it and there's no valid fallback.
+  PostgreSQL/Grafana/OpenObserve/Docker Hub credentials all come from it and there's no valid fallback.
     ```bash
     cp .env.example .env
     # Edit .env with your op://<vault>/<item>/<field> URIs
@@ -248,16 +301,22 @@ runs, via Prisma's own postinstall hook).
   - Installs metrics-server (patched with `--kubelet-insecure-tls`) and waits for it to become ready -
     required for the `message-service` and `issue-service` `HorizontalPodAutoscaler`s to read
     CPU/memory usage.
-  - Builds the `message-service:latest` and `issue-service:latest` images and loads both into the
-    cluster.
+  - Installs ArgoCD and Argo CD Image Updater into the `argocd` namespace, configures Image
+    Updater's read-only Docker Hub credentials, and exposes the ArgoCD UI at
+    `http://argocd.localhost/` - see [Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd).
+    `message-service`/`issue-service` images are no longer built or `kind load`-ed locally; they
+    come from Docker Hub, built and pushed by GitHub Actions on push to `main`.
   - Applies `k8s/observability/` (OTel Collector, Prometheus, Grafana - see Architecture above), dynamically injects observability secrets from environment, then
     installs OpenObserve via Helm (`openobserve/openobserve-standalone` - see Architecture above)
     and Headlamp via Helm (`headlamp/headlamp` - see Architecture above).
-  - Applies `k8s/` via Kustomize: `Secret` + `ConfigMap`s, dynamically injects PostgreSQL database credentials from environment, the `postgres` `StatefulSet`/headless
-    `Service` (with an init script creating the `issuedb` database alongside `messagedb` - see
+  - Registers the ArgoCD `Application` that owns `k8s/` (replacing a direct `kubectl apply -k
+    k8s/`): `Secret` + `ConfigMap`s, the `postgres` `StatefulSet`/headless `Service` (with an init
+    script creating the `issuedb` database alongside `messagedb` - see
     [Issue Service](#issue-service-second-graphql-api) above), the `hazelcast` `Deployment`/`Service`,
     and, for each of `message-service`/`issue-service`, a `Deployment`/`Service`
-    (`ClusterIP`)/`HorizontalPodAutoscaler` and its own `Ingress`.
+    (`ClusterIP`)/`HorizontalPodAutoscaler` and its own `Ingress`. Waits for the `Application`'s
+    first sync, then dynamically injects the real PostgreSQL database credentials from environment
+    (overwriting the placeholder `k8s/secret.yaml` ArgoCD just synced).
   - Waits for PostgreSQL and Hazelcast to become ready before waiting on both APIs' rollouts (the
     `message-service` Deployment runs `wait-for-postgres` and `wait-for-hazelcast` init containers;
     `issue-service` only `wait-for-postgres`, since it has no cache dependency).
@@ -266,25 +325,35 @@ runs, via Prisma's own postinstall hook).
 
 ### Pushing a code change to the running cluster
 
-The kind cluster, PostgreSQL data, and ingress-nginx controller don't need to be recreated for an
-application code change. `imagePullPolicy: IfNotPresent` means the Deployment won't notice a
-same-tagged image has changed on its own, so after reloading the image you need to explicitly tell
-it to roll out new pods:
+Code changes no longer go through a local `docker build`/`kind load`/`rollout restart` loop - see
+[Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd) below. The flow is now:
 
-```bash
-docker build -t message-service:latest .
-kind load docker-image message-service:latest --name kind-graphql-prisma-cluster
-kubectl rollout restart deployment/message-service
-kubectl rollout status deployment/message-service
-```
+1. `git push` to `main` (a change under `src/**`/`prisma/**` etc. for message-service, or anything
+   under `issue-service/**`) triggers that service's GitHub Actions workflow
+   (`.github/workflows/message-service-ci.yml` / `issue-service-ci.yml`), which builds and pushes a
+   new commit-SHA-tagged image to Docker Hub.
+2. Argo CD Image Updater (polling every 2 minutes by default) notices the new tag and updates the
+   ArgoCD `Application`'s image override for that service.
+3. ArgoCD syncs the change, and `kubectl rollout status deployment/message-service` (or
+   `issue-service`) shows the rolling update happening - same rolling-update behavior as before,
+   just triggered by ArgoCD instead of a manual `kubectl rollout restart`.
 
-`kubectl rollout restart` recreates the pods one at a time (respecting the Deployment's rolling
-update strategy), so the API stays available throughout — it just now runs the code from the image
-you just rebuilt and loaded. This also runs `prisma migrate deploy` again on every pod start (see the
-Dockerfile's `ENTRYPOINT`) - idempotent, so a code-only change is a no-op there; a schema change picks
-up its new migration automatically. `k8s/postgres-statefulset.yaml`, `k8s/*.yaml` in general, and the
-cluster/node topology are untouched by this flow; only re-apply `kubectl apply -k k8s/` first if
-you've also changed a manifest (env vars, resources, the Ingress, etc.) alongside the code.
+This also runs `prisma migrate deploy` again on every pod start (see the Dockerfile's
+`ENTRYPOINT`) - idempotent, so a code-only change is a no-op there; a schema change picks up its
+new migration automatically.
+
+**This is a slower inner loop than the old local flow** (CI time + up to one Image Updater poll
+interval, vs. seconds) - it's the deploy step, not the "test my change" step. For fast iteration,
+keep using `npm run dev` (or `cd issue-service && npm run dev`) against a local Postgres/Hazelcast,
+as described in [Local run against PostgreSQL + Hazelcast](#1-local-run-against-postgresql--hazelcast)
+above, and only push to `main` once you're ready to deploy.
+
+A change to a manifest itself (env vars, resources, the Ingress, a new Kustomize resource, etc.)
+under `k8s/` doesn't need a CI push at all - ArgoCD's own `selfHeal`/polling picks it up directly
+from git the next time it reconciles (or immediately via the ArgoCD UI/CLI's manual "Sync" if you
+don't want to wait). `k8s/postgres-statefulset.yaml` and the cluster/node topology
+(`k8s/kind-config.yaml`) are still unmanaged by ArgoCD - a `kind-config.yaml` change still needs
+[recreating the cluster](#adding-a-new-kind-node).
 
 `deploy-kind.sh` already points your current `kubectl` context at the cluster
 (`kubectl config use-context kind-kind-graphql-prisma-cluster`), so no extra kubeconfig setup is

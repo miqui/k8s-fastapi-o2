@@ -19,3 +19,11 @@ resources:
   - issue-service-hpa.yaml
   - issue-service-service.yaml
   - issue-service-ingress.yaml
+
+images:
+  - name: message-service
+    newName: docker.io/miqui/message-service
+    newTag: latest
+  - name: issue-service
+    newName: docker.io/miqui/issue-service
+    newTag: latest
