@@ -2,8 +2,6 @@
 set -eo pipefail
 
 CLUSTER_NAME="kind-graphql-prisma-cluster"
-IMAGE_NAME="message-service:latest"
-ISSUE_SERVICE_IMAGE_NAME="issue-service:latest"
 
 echo "=========================================================="
 echo " GraphQL (Apollo Server) + Prisma + PostgreSQL - Kind Deploy"
@@ -24,7 +22,7 @@ command -v op >/dev/null 2>&1 || { echo "Error: 1Password CLI (op) is required. 
 echo "=> Checking 1Password CLI readiness..."
 op whoami >/dev/null 2>&1 || { echo "Error: 1Password CLI (op) is not signed in. Run 'eval \$(op signin)', then re-run: op run --env-file=.env -- ./deploy-kind.sh"; exit 1; }
 
-REQUIRED_SECRET_VARS=(DB_USER DB_PASSWORD POSTGRES_USER POSTGRES_PASSWORD GF_SECURITY_ADMIN_USER GF_SECURITY_ADMIN_PASSWORD ZO_ROOT_USER_EMAIL ZO_ROOT_USER_PASSWORD)
+REQUIRED_SECRET_VARS=(DB_USER DB_PASSWORD POSTGRES_USER POSTGRES_PASSWORD GF_SECURITY_ADMIN_USER GF_SECURITY_ADMIN_PASSWORD ZO_ROOT_USER_EMAIL ZO_ROOT_USER_PASSWORD DOCKERHUB_USERNAME DOCKERHUB_TOKEN_RO)
 MISSING_SECRET_VARS=()
 for var in "${REQUIRED_SECRET_VARS[@]}"; do
   [ -n "${!var:-}" ] || MISSING_SECRET_VARS+=("${var}")
@@ -70,23 +68,54 @@ kubectl wait --namespace kube-system \
   --for=condition=available deployment/metrics-server \
   --timeout=120s
 
-# 4. Build Docker images
-echo "=> Building Docker image '${IMAGE_NAME}'..."
-docker build -t "${IMAGE_NAME}" .
-echo "=> Building Docker image '${ISSUE_SERVICE_IMAGE_NAME}'..."
-docker build -t "${ISSUE_SERVICE_IMAGE_NAME}" issue-service/
+# 4. Install ArgoCD (message-service/issue-service images now come from Docker Hub, built and
+#    pushed by GitHub Actions on push to main - see .github/workflows/ - rather than being built
+#    and `kind load`-ed locally).
+echo "=> Installing ArgoCD..."
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+# --server-side: the applicationsets CRD is too large for client-side apply's last-applied
+# annotation (262144-byte limit), which otherwise fails the install.
+kubectl apply --server-side --force-conflicts -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+# argocd-server defaults to redirecting HTTP -> HTTPS with a self-signed cert, which the plain
+# HTTP nginx Ingress below can't follow. --insecure makes it serve plain HTTP on its "http"
+# service port instead - same trust level as Grafana/OpenObserve/Headlamp on this local cluster.
+kubectl patch deployment argocd-server -n argocd --type=json \
+  -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--insecure"}]'
+echo "=> Waiting for ArgoCD to be ready..."
+kubectl wait --namespace argocd \
+  --for=condition=available deployment/argocd-server deployment/argocd-repo-server \
+  --timeout=180s
+kubectl rollout status statefulset/argocd-application-controller -n argocd --timeout=180s
 
-# 5. Load Docker images into kind nodes
-echo "=> Loading '${IMAGE_NAME}' into kind cluster..."
-kind load docker-image "${IMAGE_NAME}" --name "${CLUSTER_NAME}"
-echo "=> Loading '${ISSUE_SERVICE_IMAGE_NAME}' into kind cluster..."
-kind load docker-image "${ISSUE_SERVICE_IMAGE_NAME}" --name "${CLUSTER_NAME}"
+# Pinned to a release (unlike ArgoCD's "stable" above): v1.x configures itself via an
+# ImageUpdater CRD (k8s/argocd/image-updater.yaml), a breaking change from v0.x's Application
+# annotations, and its manifest path has moved between majors.
+echo "=> Installing Argo CD Image Updater..."
+kubectl apply --server-side --force-conflicts -n argocd -f https://raw.githubusercontent.com/argoproj-labs/argocd-image-updater/v1.3.0/config/install.yaml
+echo "=> Waiting for Argo CD Image Updater to be ready..."
+kubectl wait --namespace argocd \
+  --for=condition=available deployment/argocd-image-updater-controller \
+  --timeout=120s
 
-# 6. Apply the observability stack (OTel Collector, Prometheus, Grafana, OpenObserve)
+# 4a. Read-only Docker Hub credentials for Image Updater to poll tags without hitting the
+#     anonymous pull rate limit - deliberately a separate, read-only token from the one CI uses
+#     to push (see DOCKERHUB_TOKEN_RO in .env.example).
+echo "=> Configuring Argo CD Image Updater's Docker Hub credentials..."
+kubectl create secret docker-registry dockerhub-image-updater-creds \
+  --namespace argocd \
+  --docker-server=https://index.docker.io/v1/ \
+  --docker-username="${DOCKERHUB_USERNAME}" \
+  --docker-password="${DOCKERHUB_TOKEN_RO}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# 4b. Expose the ArgoCD UI at http://argocd.localhost/
+kubectl apply -f k8s/argocd/ingress.yaml
+
+# 5. Apply the observability stack (OTel Collector, Prometheus, Grafana, OpenObserve)
 echo "=> Applying observability stack manifests..."
 kubectl apply -k k8s/observability/
 
-# 6a. Inject observability secrets from environment (via op run)
+# 5a. Inject observability secrets from environment (via op run)
 echo "=> Configuring observability secrets..."
 kubectl create secret generic grafana-credentials \
   --namespace observability \
@@ -99,7 +128,7 @@ kubectl create secret generic openobserve-remote-write-credentials \
   --from-literal=password="${ZO_ROOT_USER_PASSWORD}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# 6b. Install OpenObserve (openobserve-standalone chart - single node, not the HA chart).
+# 5b. Install OpenObserve (openobserve-standalone chart - single node, not the HA chart).
 #     Prometheus (deployed above) remote_writes every scraped series, including the
 #     message-service metrics, into it - see k8s/observability/prometheus-configmap.yaml.
 echo "=> Installing OpenObserve (openobserve-standalone chart)..."
@@ -116,7 +145,7 @@ helm upgrade --install openobserve openobserve/openobserve-standalone \
   --set "auth.ZO_ROOT_USER_PASSWORD=${ZO_ROOT_USER_PASSWORD}" \
   --wait --timeout 180s
 
-# 6c. Install Headlamp (https://headlamp.dev/ - general-purpose Kubernetes dashboard,
+# 5c. Install Headlamp (https://headlamp.dev/ - general-purpose Kubernetes dashboard,
 #     its own "headlamp" namespace, unrelated to the message-service metrics stack above).
 echo "=> Installing Headlamp (Kubernetes dashboard)..."
 if ! helm repo list | grep -q '^headlamp[[:space:]]'; then
@@ -133,11 +162,21 @@ helm upgrade --install headlamp headlamp/headlamp \
   -f k8s/headlamp/headlamp-values.yaml \
   --wait --timeout 120s
 
-# 7. Apply Kubernetes manifests
-echo "=> Applying Kubernetes manifests..."
-kubectl apply -k k8s/
+# 6. Register the ArgoCD Application that owns k8s/ (Postgres, Hazelcast, message-service,
+#    issue-service, Ingress, ResourceQuota - everything k8s/kustomization.yaml produces).
+#    ArgoCD's own sync now does what `kubectl apply -k k8s/` used to do directly, and keeps
+#    reapplying it (selfHeal) - see k8s/argocd/application.yaml for the postgres-credentials
+#    ignoreDifferences caveat that makes that safe alongside step 6a below.
+echo "=> Registering the ArgoCD Application and its Image Updater config..."
+kubectl apply -f k8s/argocd/application.yaml
+kubectl apply -f k8s/argocd/image-updater.yaml
+echo "=> Waiting for the ArgoCD Application's first sync..."
+kubectl wait --namespace argocd \
+  --for=jsonpath='{.status.sync.status}'=Synced application/graphql-apollo-prisma-o2 \
+  --timeout=180s
 
-# 7a. Inject database secrets from environment (via op run)
+# 6a. Inject database secrets from environment (via op run) - real values, overwriting the
+#     placeholder k8s/secret.yaml just synced by ArgoCD above.
 echo "=> Configuring PostgreSQL database credentials from environment..."
 kubectl create secret generic postgres-credentials \
   --namespace default \
@@ -204,4 +243,5 @@ echo " issue-service health:     http://localhost/issues/health/liveness"
 echo " Grafana:                  http://grafana.localhost/ (credentials from 1Password / Secret)"
 echo " OpenObserve:              http://openobserve.localhost/ (credentials from 1Password / Secret)"
 echo " Headlamp:                 http://headlamp.localhost/ (login token: kubectl create token headlamp -n headlamp --duration=24h)"
+echo " ArgoCD:                   http://argocd.localhost/ (login: admin / kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
 echo "=========================================================="
