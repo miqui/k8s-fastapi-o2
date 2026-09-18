@@ -99,11 +99,13 @@ kubectl wait --namespace argocd \
 
 # 4a. Read-only Docker Hub credentials for Image Updater to poll tags without hitting the
 #     anonymous pull rate limit - deliberately a separate, read-only token from the one CI uses
-#     to push (see DOCKERHUB_TOKEN_RO in .env.example).
+#     to push (see DOCKERHUB_TOKEN_RO in .env.example). The docker-server must be
+#     https://registry-1.docker.io: that's the registry endpoint Image Updater looks up, and a
+#     secret keyed on index.docker.io fails with "no valid auth entry".
 echo "=> Configuring Argo CD Image Updater's Docker Hub credentials..."
 kubectl create secret docker-registry dockerhub-image-updater-creds \
   --namespace argocd \
-  --docker-server=https://index.docker.io/v1/ \
+  --docker-server=https://registry-1.docker.io \
   --docker-username="${DOCKERHUB_USERNAME}" \
   --docker-password="${DOCKERHUB_TOKEN_RO}" \
   --dry-run=client -o yaml | kubectl apply -f -

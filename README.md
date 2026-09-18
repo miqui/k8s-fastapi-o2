@@ -132,7 +132,9 @@ plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take 
   npm run build` as a typecheck gate, then builds and pushes
   `docker.io/miqui/message-service`/`issue-service`, tagged `<UTC yyyymmddHHMMSS>-<7-char sha>`
   (e.g. `20260918140501-a1b2c3d`, sortable by build time yet traceable to a commit) plus a floating
-  `:latest`. Push credentials (`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`, a **read/write** Docker Hub
+  `:latest`. Images are built for both `linux/amd64` and `linux/arm64` (via QEMU): kind's nodes
+  run the host's architecture (arm64 on Apple Silicon), and an amd64-only image fails to pull there
+  with `no match for platform in manifest`. Push credentials (`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`, a **read/write** Docker Hub
   access token, not the account password) are GitHub Actions repository secrets, never committed.
 - **ArgoCD** owns one `Application` (`k8s/argocd/application.yaml`, `graphql-apollo-prisma-o2`)
   whose source is this repo's `k8s/` Kustomization - the same Postgres/Hazelcast/message-service/
