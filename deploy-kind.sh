@@ -124,10 +124,12 @@ if ! helm repo list | grep -q '^headlamp[[:space:]]'; then
 fi
 helm repo update headlamp
 
+kubectl create namespace headlamp --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f k8s/headlamp/resourcequota.yaml
+
 helm upgrade --install headlamp headlamp/headlamp \
   --version 0.45.0 \
   --namespace headlamp \
-  --create-namespace \
   -f k8s/headlamp/headlamp-values.yaml \
   --wait --timeout 120s
 

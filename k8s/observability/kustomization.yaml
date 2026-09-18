@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
   - namespace.yaml
+  - resourcequota.yaml
   - otel-collector-configmap.yaml
   - otel-collector-deployment.yaml
   - otel-collector-service.yaml
