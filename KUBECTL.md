@@ -106,3 +106,15 @@ kubectl rollout status deployment/prometheus -n observability
 kubectl get pods -n observability -l app=prometheus -o wide
 kubectl describe pod -n observability -l app=prometheus
 ```
+
+## Diagnosing Grafana vs Headlamp pod count mismatch (48 vs 50)
+
+```bash
+kubectl config current-context
+kubectl get pods --all-namespaces --no-headers | wc -l
+kubectl get pods --all-namespaces -o wide
+```
+
+Turned out both counts were correct: `kubectl`/Headlamp count all 50 pod objects, while Grafana's
+panel filters on `phase="Running"`, excluding the 2 `Completed` `ingress-nginx-admission-*` Job pods
+(50 − 2 = 48).
