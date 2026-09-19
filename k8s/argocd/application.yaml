@@ -20,10 +20,15 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      # Without this, ignoreDifferences below only suppresses drift *detection*; every sync (e.g.
+      # one triggered by Image Updater changing an image) still applies the full manifest and
+      # overwrites the real postgres-credentials with the committed placeholder.
+      - RespectIgnoreDifferences=true
   # postgres-credentials is a committed placeholder in k8s/secret.yaml that deploy-kind.sh
-  # immediately overwrites in-cluster with real 1Password-sourced values. Without this,
-  # selfHeal would revert that Secret back to the placeholder on every reconcile and break
-  # Postgres auth - see the README's ArgoCD section for the full explanation.
+  # immediately overwrites in-cluster with real 1Password-sourced values. Together with
+  # RespectIgnoreDifferences above, ArgoCD leaves that Secret's live values alone - see the
+  # README's ArgoCD section for the full explanation.
   ignoreDifferences:
     - group: ""
       kind: Secret

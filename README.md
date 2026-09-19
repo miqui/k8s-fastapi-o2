@@ -159,11 +159,13 @@ plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take 
 - **The `postgres-credentials` Secret is the one deliberate exception.** `k8s/secret.yaml` is a
   committed placeholder (`YOUR_POSTGRES_DB_USER`, etc. - see its own comment); `deploy-kind.sh`
   overwrites it in-cluster with real 1Password-sourced values right after the `Application`'s
-  first sync. Without an `ignoreDifferences` entry for it in `application.yaml`, ArgoCD's
-  `selfHeal` would treat that real Secret as drift from git and revert it back to the placeholder
-  on its next reconcile, breaking Postgres auth for anything that restarts afterward - the
-  `ignoreDifferences` block is what keeps ArgoCD managing everything else while leaving that one
-  Secret's live values alone.
+  first sync. Two settings in `application.yaml` keep ArgoCD from reverting it to the placeholder:
+  `ignoreDifferences` on that Secret (so it isn't flagged as drift) **and** the
+  `RespectIgnoreDifferences=true` sync option. Both are needed: `ignoreDifferences` alone only
+  suppresses drift *detection*, while every sync - including the one Image Updater triggers when it
+  changes an image - still applies the full manifest and would overwrite the real Secret, which
+  breaks Postgres auth for any pod that starts afterward (`P1000: Authentication failed ...
+  credentials for YOUR_POSTGRES_DB_USER`). This was hit for real on the first rollout.
 - **Login**: `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o
   jsonpath='{.data.password}' | base64 -d` (same bearer-token-retrieval idiom as Headlamp above).
   `argocd-server` is patched with `--insecure` so the plain-HTTP `*.localhost` Ingress pattern used
