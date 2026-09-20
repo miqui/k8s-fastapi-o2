@@ -41,3 +41,17 @@ config:
             - argocd
             - ingress-nginx
             - local-path-storage
+
+# The reports controller can only list/watch the kinds it was granted RBAC for. Without this,
+# restrict-cluster-admin-bindings shows `ready: false` ("missing permissions ... clusterrolebindings")
+# and its background scan produces no results or ClusterPolicyReport - admission-time auditing
+# still worked, which is what made it easy to miss. Found by running Kyverno for real; the
+# Kyverno CLI doesn't model controller RBAC. Add a rule here for any other kind a policy matches
+# that the chart doesn't already grant.
+reportsController:
+  rbac:
+    clusterRole:
+      extraResources:
+        - apiGroups: ["rbac.authorization.k8s.io"]
+          resources: ["clusterrolebindings"]
+          verbs: ["get", "list", "watch"]

@@ -275,6 +275,15 @@ CLI pinned to `v1.19.1` (SHA-256-checked) to match the Helm chart; bump the two 
   once) pod creation in `default` is rejected and retries until Kyverno is back. The audit policies
   set `failurePolicy: Ignore` - they can never deny, so an outage must not block anything on their
   account. Excluded namespaces (see above) are unaffected either way.
+- **Reports need RBAC.** Kyverno's reports controller can only scan kinds the chart granted it;
+  `reportsController.rbac.clusterRole.extraResources` in `kyverno-values.yaml` adds
+  `clusterrolebindings` for `restrict-cluster-admin-bindings`. A policy on any other kind the chart
+  doesn't cover needs the same, or it audits at admission time but produces no background results.
+  Only the reports controller needs it. The policy's `ready` status is recomputed only when the
+  policy object is reconciled, so after fixing RBAC on a running cluster re-apply or touch the policy
+  (`kubectl annotate validatingpolicy <name> touched=$(date +%s) --overwrite`) or it keeps saying
+  "missing permissions". A fresh install doesn't hit this: the grant is in the Helm values, so it
+  already exists when the policies are first created.
 
 ## Issue Service (second GraphQL API)
 
