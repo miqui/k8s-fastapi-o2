@@ -9,7 +9,5 @@ kind: Kustomization
 resources:
   - overlays/enforce-default
   - overlays/audit-other
-  - audit-only/disallow-latest-tag.yaml
-  - audit-only/restrict-cluster-admin-bindings.yaml
-  - exceptions/node-exporter.yaml
-  - exceptions/headlamp-admin.yaml
+  - audit-only
+  - exceptions
