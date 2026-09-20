@@ -113,6 +113,25 @@ kubectl create secret docker-registry dockerhub-image-updater-creds \
 # 4b. Expose the ArgoCD UI at http://argocd.localhost/
 kubectl apply -f k8s/argocd/ingress.yaml
 
+# 4c. Install Kyverno (https://kyverno.io - policy engine; values in k8s/kyverno/kyverno-values.yaml).
+#     Installed here, before the observability stack, Headlamp and the ArgoCD Application, so its
+#     admission webhooks and the policies.kyverno.io CRDs already exist when the policies in
+#     k8s/policies/ are registered. The chart is pinned like OpenObserve/Headlamp below.
+echo "=> Installing Kyverno..."
+if ! helm repo list | grep -q '^kyverno[[:space:]]'; then
+  helm repo add kyverno https://kyverno.github.io/kyverno/
+fi
+helm repo update kyverno
+
+helm upgrade --install kyverno kyverno/kyverno \
+  --version 3.9.1 \
+  --namespace kyverno --create-namespace \
+  -f k8s/kyverno/kyverno-values.yaml \
+  --wait --timeout 240s
+# helm --wait covers the controllers; also make sure the CRDs the policies need are usable.
+kubectl wait --for=condition=established --timeout=60s \
+  crd/validatingpolicies.policies.kyverno.io crd/policyexceptions.policies.kyverno.io
+
 # 5. Apply the observability stack (OTel Collector, Prometheus, Grafana, OpenObserve)
 echo "=> Applying observability stack manifests..."
 kubectl apply -k k8s/observability/
@@ -163,6 +182,18 @@ helm upgrade --install headlamp headlamp/headlamp \
   --namespace headlamp \
   -f k8s/headlamp/headlamp-values.yaml \
   --wait --timeout 120s
+
+# 5d. Register the ArgoCD Application that owns k8s/policies/ (Kyverno policies + exceptions) and
+#     wait for its first sync, so the policies exist before step 6 syncs any workload. Argo only
+#     waits for the resources to be applied, not for Kyverno to finish loading them into its
+#     webhooks - a brief gap, harmless here since the workloads are written to pass them.
+#     Like the Application in step 6 it tracks `main`, so k8s/policies/ must exist on main.
+echo "=> Registering the Kyverno policies ArgoCD Application..."
+kubectl apply -f k8s/argocd/policies-application.yaml
+echo "=> Waiting for the policies Application's first sync..."
+kubectl wait --namespace argocd \
+  --for=jsonpath='{.status.sync.status}'=Synced application/kyverno-policies \
+  --timeout=180s
 
 # 6. Register the ArgoCD Application that owns k8s/ (Postgres, Hazelcast, message-service,
 #    issue-service, Ingress, ResourceQuota - everything k8s/kustomization.yaml produces).
