@@ -13,6 +13,8 @@ metadata:
     policies.kyverno.io/severity: medium
 spec:
   validationActions: [Audit]
+  # Audit-only, so it must never block: see the note in overlays/audit-other.
+  failurePolicy: Ignore
   matchConstraints:
     namespaceSelector:
       matchExpressions:

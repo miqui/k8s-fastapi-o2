@@ -12,6 +12,8 @@ metadata:
     policies.kyverno.io/severity: high
 spec:
   validationActions: [Audit]
+  # Audit-only, so it must never block: see the note in overlays/audit-other.
+  failurePolicy: Ignore
   matchConstraints:
     resourceRules:
       - apiGroups: ["rbac.authorization.k8s.io"]

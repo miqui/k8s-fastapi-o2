@@ -270,6 +270,11 @@ CLI pinned to `v1.19.1` (SHA-256-checked) to match the Helm chart; bump the two 
   Headlamp and OpenObserve charts are not rendered, so their pods are covered by the in-cluster audit
   policies only.
 - The `observability` workloads are report-only until they get their own `securityContext`s.
+- **Fail-closed on `default`.** The enforce policies keep Kyverno's default `failurePolicy: Fail`, and
+  Kyverno runs one replica here, so while it is down (a restart, or all kind nodes coming back up at
+  once) pod creation in `default` is rejected and retries until Kyverno is back. The audit policies
+  set `failurePolicy: Ignore` - they can never deny, so an outage must not block anything on their
+  account. Excluded namespaces (see above) are unaffected either way.
 
 ## Issue Service (second GraphQL API)
 
