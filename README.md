@@ -171,6 +171,120 @@ plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take 
   `argocd-server` is patched with `--insecure` so the plain-HTTP `*.localhost` Ingress pattern used
   for Grafana/OpenObserve/Headlamp works here too, rather than needing TLS passthrough.
 
+## Policy as Code with Kyverno
+
+[Kyverno](https://kyverno.io/) admission-controls what may run in the cluster, and the *same*
+policies are checked against the manifests in CI before a change merges. They use Kyverno's
+CEL-based `policies.kyverno.io/v1` types (`ValidatingPolicy`, `PolicyException`); the older
+`ClusterPolicy` is deprecated (Kyverno's docs schedule its removal for v1.20), so don't copy
+examples that use it.
+
+- **Delivery**: `deploy-kind.sh` installs Kyverno itself with Helm (pinned, values in
+  `k8s/kyverno/kyverno-values.yaml`); the policies are a separate ArgoCD `Application`
+  (`kyverno-policies`) syncing `k8s/policies/` with `prune` + `selfHeal`, so a rule deleted from git
+  stops being enforced and a policy edited or deleted by hand is put back.
+- **Layout** (`k8s/policies/`): `rules/` holds each rule body once, unscoped. Two kustomize overlays
+  turn them into a **Deny** copy for the `default` namespace (`overlays/enforce-default`, names get
+  an `-enforce` suffix) and an **Audit** copy for `observability` and `headlamp`
+  (`overlays/audit-other`, `-audit`) - the same rule, enforced where this repo owns and has hardened
+  the workloads, report-only where it doesn't yet. `audit-only/` holds rules that only ever audit,
+  and `exceptions/` the `PolicyException`s.
+
+| Policy | What it checks | Mode |
+| --- | --- | --- |
+| `disallow-host-access` | no privileged containers, `hostNetwork`/`hostPID`/`hostIPC`, `hostPath` volumes or `hostPort`s (a Pod Security Standards "baseline" subset) | Deny in `default`, Audit in `observability`/`headlamp` |
+| `require-secure-container-context` | every container, init containers included: `runAsNonRoot`, `allowPrivilegeEscalation: false`, drop `ALL` capabilities, `RuntimeDefault`/`Localhost` seccomp (a "restricted" subset; pod-level values count as defaults) | same |
+| `require-resources` | CPU and memory requests **and** limits on every container | same |
+| `restrict-image-repositories` | image must be on an exact-repository allowlist (tags/digests ignored; `postgres:16-alpine` is normalized to `docker.io/library/postgres`) | same |
+| `disallow-latest-tag` | image pinned to a tag other than `:latest`, or a digest | Audit only |
+| `restrict-cluster-admin-bindings` | `ClusterRoleBinding`s to `cluster-admin` (built-in `system:`/`kubeadm:` ones skipped) | Audit only, cluster-wide |
+
+Rules that match Pods also cover Deployments, StatefulSets and DaemonSets (Kyverno "autogen"), so a
+non-compliant Deployment is rejected when ArgoCD applies it rather than stalling later as
+ReplicaSet events. `disallow-latest-tag` is audit-only on purpose: `k8s/kustomization.yaml`'s
+`newTag: latest` is the fallback for the very first sync, before Image Updater swaps in a timestamped
+tag, so denying it would block the first rollout.
+
+**Hardened workloads.** To pass the enforce set, the `default`-namespace workloads now set a
+`securityContext`: message-service/issue-service run as uid/gid 1000 (the image's `USER node` is a
+name, not a number, so `runAsUser` has to be explicit for `runAsNonRoot` to be verifiable), postgres
+as 70 (its exporter sidecar as 65534) and hazelcast as 100:101, all with privilege escalation off and
+all capabilities dropped. A Postgres volume first initialized by the old root-started container is
+already owned by uid 70, so nothing needs migrating - but the securityContext change rolls
+`postgres-0`, which means a short database outage for both APIs the first time it syncs.
+
+**Exceptions** (`k8s/policies/exceptions/`) record known, accepted violations: `node-exporter` (it
+needs `hostNetwork`/`hostPID`, a `hostPath` mount of `/` and a `hostPort` to read node metrics) is
+exempt from the host-access and container-context audit rules, and the Headlamp chart's
+`headlamp-admin` `cluster-admin` binding from `restrict-cluster-admin-bindings`. They live in the
+`kyverno` namespace because that is the only place `features.policyExceptions` honours them. To add
+one, create the file, list it in that directory's `kustomization.yaml`, and reference the
+**suffixed** policy name in `policyRefs` (e.g. `require-secure-container-context-audit`).
+
+### Checking manifests before merge
+
+`.github/workflows/policy-check.yml` runs `check-policies.sh` on pull requests and on pushes to
+`main` that touch `k8s/`. Run it locally the same way (needs `kubectl` and the Kyverno CLI, e.g.
+`brew install kyverno`):
+
+```bash
+./check-policies.sh
+```
+
+1. The **enforce** policies against `k8s/` must pass - this is the blocking part.
+2. The **audit** policies against `k8s/` and `k8s/observability/` are only reported (in the job
+   summary in CI): today that is the `:latest` fallback and the four `observability` Deployments
+   that still have no `securityContext`.
+3. A **self-test** requires the enforce policies to reject `.github/policy-fixtures/violating-deployment.yaml`,
+   and the run fails if no rules loaded, a policy errors, or nothing passed - otherwise a policy that
+   silently stopped matching would let the check pass vacuously.
+
+Enforce and audit are separate runs because the Kyverno CLI exits 1 on any failure and its
+`--audit-warn` flag doesn't tell Deny from Audit for the CEL policy types. `PolicyException`s are
+passed with `--exception`: in the same file as the policies the CLI loads nothing. CI installs the
+CLI pinned to `v1.19.1` (SHA-256-checked) to match the Helm chart; bump the two together.
+
+### Working with the policies
+
+- **Reports**: audit findings, and exceptions applied, appear in Kyverno's policy reports
+  (`kubectl get policyreport -A`, plus `kubectl get clusterpolicyreport` for cluster-scoped ones).
+- **New image**: add its repository to `allowed` in `k8s/policies/rules/restrict-image-repositories.yaml`
+  (one list serves both the enforce and audit copies), or the enforce set will reject it.
+- **New namespace / widening enforcement**: change the `namespaceSelector` in the overlays' patches.
+  The webhook additionally never sees `kube-system`, `argocd`, `ingress-nginx` or
+  `local-path-storage` (`config.webhooks` in `kyverno-values.yaml`), so an unhealthy Kyverno can't
+  block system or GitOps changes.
+- **Promoting an audit policy to enforce**: for a namespaced rule like `disallow-latest-tag`, fix
+  what it flags first, then move it from `audit-only/` into `rules/` (and drop its own
+  `namespaceSelector` - the overlays add one) so it gets Deny/Audit copies like the others; any
+  exception's `policyRefs` then need the `-enforce`/`-audit` suffix. `restrict-cluster-admin-bindings`
+  is cluster-scoped, so it stays where it is. Confirm with `./check-policies.sh`.
+
+### Status and limits
+
+- Kyverno v1.19 is tested against Kubernetes 1.33-1.35; the kind nodes here run a newer version.
+  That is accepted rather than pinned - if the policies misbehave after a kind upgrade, suspect this
+  first, and check `kubectl get pods -n kyverno` after the first deploy.
+- `restrict-image-repositories` is exact-match on the *spelling*: `index.docker.io/...` is rejected
+  even though it is Docker Hub. Only images in this repo's manifests are checked in CI - the
+  Headlamp and OpenObserve charts are not rendered, so their pods are covered by the in-cluster audit
+  policies only.
+- The `observability` workloads are report-only until they get their own `securityContext`s.
+- **Fail-closed on `default`.** The enforce policies keep Kyverno's default `failurePolicy: Fail`, and
+  Kyverno runs one replica here, so while it is down (a restart, or all kind nodes coming back up at
+  once) pod creation in `default` is rejected and retries until Kyverno is back. The audit policies
+  set `failurePolicy: Ignore` - they can never deny, so an outage must not block anything on their
+  account. Excluded namespaces (see above) are unaffected either way.
+- **Reports need RBAC.** Kyverno's reports controller can only scan kinds the chart granted it;
+  `reportsController.rbac.clusterRole.extraResources` in `kyverno-values.yaml` adds
+  `clusterrolebindings` for `restrict-cluster-admin-bindings`. A policy on any other kind the chart
+  doesn't cover needs the same, or it audits at admission time but produces no background results.
+  Only the reports controller needs it. The policy's `ready` status is recomputed only when the
+  policy object is reconciled, so after fixing RBAC on a running cluster re-apply or touch the policy
+  (`kubectl annotate validatingpolicy <name> touched=$(date +%s) --overwrite`) or it keeps saying
+  "missing permissions". A fresh install doesn't hit this: the grant is in the Helm values, so it
+  already exists when the policies are first created.
+
 ## Issue Service (second GraphQL API)
 
 `issue-service/` is a second, fully independent GraphQL API in this same repo - same stack
@@ -307,9 +421,16 @@ runs, via Prisma's own postinstall hook).
     `http://argocd.localhost/` - see [Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd).
     `message-service`/`issue-service` images are no longer built or `kind load`-ed locally; they
     come from Docker Hub, built and pushed by GitHub Actions on push to `main`.
+  - Installs [Kyverno](#policy-as-code-with-kyverno) via Helm (`kyverno/kyverno`, chart `3.9.1` =
+    Kyverno v1.19.1, values in `k8s/kyverno/kyverno-values.yaml`) into its own `kyverno` namespace,
+    before the observability stack, and waits for its `ValidatingPolicy`/`PolicyException` CRDs.
   - Applies `k8s/observability/` (OTel Collector, Prometheus, Grafana - see Architecture above), dynamically injects observability secrets from environment, then
     installs OpenObserve via Helm (`openobserve/openobserve-standalone` - see Architecture above)
     and Headlamp via Helm (`headlamp/headlamp` - see Architecture above).
+  - Registers the `kyverno-policies` ArgoCD `Application` (`k8s/argocd/policies-application.yaml`,
+    syncing `k8s/policies/`) and waits for its first sync - *before* the app `Application` below,
+    so the enforce policies already exist when the workloads first sync. It tracks `main`, so
+    `k8s/policies/` has to be merged before you run the script.
   - Registers the ArgoCD `Application` that owns `k8s/` (replacing a direct `kubectl apply -k
     k8s/`): `Secret` + `ConfigMap`s, the `postgres` `StatefulSet`/headless `Service` (with an init
     script creating the `issuedb` database alongside `messagedb` - see
@@ -352,9 +473,8 @@ above, and only push to `main` once you're ready to deploy.
 A change to a manifest itself (env vars, resources, the Ingress, a new Kustomize resource, etc.)
 under `k8s/` doesn't need a CI push at all - ArgoCD's own `selfHeal`/polling picks it up directly
 from git the next time it reconciles (or immediately via the ArgoCD UI/CLI's manual "Sync" if you
-don't want to wait). `k8s/postgres-statefulset.yaml` and the cluster/node topology
-(`k8s/kind-config.yaml`) are still unmanaged by ArgoCD - a `kind-config.yaml` change still needs
-[recreating the cluster](#adding-a-new-kind-node).
+don't want to wait). The cluster/node topology (`k8s/kind-config.yaml`) is still unmanaged by
+ArgoCD - a `kind-config.yaml` change still needs [recreating the cluster](#adding-a-new-kind-node).
 
 `deploy-kind.sh` already points your current `kubectl` context at the cluster
 (`kubectl config use-context kind-kind-graphql-prisma-cluster`), so no extra kubeconfig setup is

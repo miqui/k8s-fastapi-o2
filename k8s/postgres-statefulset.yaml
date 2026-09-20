@@ -17,9 +17,25 @@ spec:
     spec:
       nodeSelector:
         workload: db
+      securityContext:
+        # 70 is the postgres user/group in the postgres:*-alpine images. Data first initialized
+        # by the old root-started container is already owned by uid 70 (the entrypoint drops to
+        # it), so switching an existing volume to non-root needs no migration - verified by
+        # re-opening a root-initialized volume with this exact securityContext. fsGroup is for
+        # storage classes that apply it; kind's local-path volumes are world-writable regardless.
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:16-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           # shared_preload_libraries must be set at server start (can't be done via a plain SQL
           # statement); schema.sql's CREATE EXTENSION IF NOT EXISTS pg_stat_statements then just
           # attaches to this already-preloaded library. pg_stat_statements.track=all also counts
@@ -86,6 +102,12 @@ spec:
         # and the "PostgreSQL Ops & Queries" Grafana dashboard that reads them.
         - name: postgres-exporter
           image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsUser: 65534
+            runAsGroup: 65534
           args:
             - "--collector.stat_statements"
             - "--collector.stat_statements.include_query"

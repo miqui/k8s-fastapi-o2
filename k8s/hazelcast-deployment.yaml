@@ -16,12 +16,32 @@ spec:
     spec:
       nodeSelector:
         workload: cache
+      securityContext:
+        # 100:101 is the `hazelcast` user in hazelcast/hazelcast, and coincidentally also
+        # `curl_user` in curlimages/curl - so one pod-level identity covers the init container
+        # writing the javaagent jar into the shared emptyDir and the container reading it.
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       # Downloads the JMX-to-Prometheus javaagent into a volume shared with the hazelcast
       # container, once per pod start - avoids needing a custom Hazelcast Docker image just to
       # bake the jar in. See the "hazelcast" container's JAVA_OPTS for how it's attached.
       initContainers:
         - name: jmx-exporter-agent
           image: curlimages/curl:8.22.0
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "16Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command:
             - sh
             - -c
@@ -32,6 +52,10 @@ spec:
       containers:
         - name: hazelcast
           image: hazelcast/hazelcast:5.5.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: HZ_CLUSTERNAME
               value: "message-service-cache"
