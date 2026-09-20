@@ -16,9 +16,23 @@ spec:
     spec:
       nodeSelector:
         workload: api
+      securityContext:
+        # runAsUser is set explicitly, not just runAsNonRoot: the image's `USER node` is a name,
+        # not a number, so the kubelet can't verify it's non-root on its own. 1000 is node's uid.
+        # The container-level securityContexts below (no privilege escalation, no capabilities)
+        # are what the Kyverno policies in k8s/policies/ require.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: wait-for-postgres
           image: postgres:16-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               cpu: "10m"
@@ -41,6 +55,10 @@ spec:
               done
         - name: wait-for-hazelcast
           image: busybox:1.36
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               cpu: "10m"
@@ -63,6 +81,10 @@ spec:
         - name: message-service
           image: message-service:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8080
               name: http
