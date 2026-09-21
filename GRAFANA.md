@@ -1,9 +1,34 @@
 # Grafana Changes — OpenObserve Observability Rollout
 
+## `$service` variable on the API dashboards (`graphql-api`, `api-red`)
+
+message-service and issue-service push identically named metrics (`graphql_requests_total`,
+`prisma_pool_*`, `nodejs_*`, ...) through the same OTel Collector, distinguished only by the
+`service_name` label. These two dashboards used to sum both APIs together, and `api-red`'s
+container panels were hardcoded to `container="message-service"`, so it mixed scopes.
+
+Both now have a multi-select **Service** dropdown (`message-service`, `issue-service`, default All):
+
+- GraphQL / Prisma / Node.js series filter on `service_name=~"$service"`.
+- cAdvisor / kube-state series filter on `container=~"$service"` or `pod=~"$service-.*"` — this
+  works because each container is named after its service (`message-service`, `issue-service`).
+- Per-service legends (`{{service_name}} / {{operation}}`), and the Prisma-pool, CPU and
+  event-loop panels are aggregated (`sum` / `max`) instead of emitting one unlabelled series per pod.
+- **Ready Pods** replaces **Service Up** on `graphql-api`: the old query was
+  `up{job="otel-collector"}`, which only says the collector is scraped, not that the API is alive.
+- **Error Ratio** and the overall errors line use `... or vector(0)` so they read 0, not "No data".
+
+**Known gap:** `graphql_errors_total` doesn't exist in Prometheus until an operation first returns
+an error (the OTel counter emits nothing before its first `.add()`), so the two *Error Rate by
+Operation* panels stay empty on a healthy system. Fixing it means pre-seeding the counter in each
+`telemetry.ts` (needs an image rebuild), not a dashboard change.
+
+Not changed: `graphql-api` uses `[1m]` rate windows and `api-red` uses `[5m]`, as before.
+
 ## New dashboard: "OpenObserve Ops"
 
 Added as a new key (`openobserve-ops.json`) in
-`k8s/observability/grafana-dashboard-json-configmap.yaml`, alongside the six pre-existing
+`k8s/observability/grafana-dashboard-json-configmap.yaml`, alongside the five pre-existing
 dashboards in that same ConfigMap. No changes were needed to
 `grafana-dashboard-provider-configmap.yaml` or `grafana-deployment.yaml` — the whole ConfigMap is
 already mounted as a directory (`/etc/grafana/provisioning/dashboards-json`), so a new key just

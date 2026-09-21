@@ -195,25 +195,49 @@ data:
     {
       "title": "graphql-api",
       "uid": "graphql-api",
+      "description": "Per-API GraphQL/Prisma/Node.js metrics. Use the Service dropdown to pick message-service, issue-service, or both - every series is filtered on service_name.",
       "timezone": "browser",
       "schemaVersion": 39,
       "refresh": "10s",
       "time": { "from": "now-15m", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "service",
+            "label": "Service",
+            "type": "custom",
+            "query": "message-service,issue-service",
+            "multi": true,
+            "includeAll": true,
+            "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+            "options": [
+              { "selected": true, "text": "All", "value": "$__all" },
+              { "selected": false, "text": "message-service", "value": "message-service" },
+              { "selected": false, "text": "issue-service", "value": "issue-service" }
+            ]
+          }
+        ]
+      },
       "panels": [
         {
           "id": 1,
-          "title": "Service Up",
+          "title": "Ready Pods",
+          "description": "Pods passing readiness for the selected service(s). Replaces the old 'Service Up' panel, which only reflected whether the OTel Collector was being scraped.",
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
-            { "expr": "up{job=\"otel-collector\"}", "refId": "A" }
+            { "expr": "sum(kube_pod_status_ready{condition=\"true\",namespace=\"default\",pod=~\"$service-.*\"}) or vector(0)", "refId": "A" }
           ],
           "fieldConfig": {
             "defaults": {
-              "mappings": [
-                { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
-              ]
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              }
             }
           }
         },
@@ -224,14 +248,14 @@ data:
           "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
-            { "expr": "prisma_pool_connections_open", "legendFormat": "open", "refId": "A" },
-            { "expr": "prisma_pool_connections_busy", "legendFormat": "busy", "refId": "B" },
-            { "expr": "prisma_pool_connections_idle", "legendFormat": "idle", "refId": "C" }
+            { "expr": "sum(prisma_pool_connections_open{service_name=~\"$service\"})", "legendFormat": "open", "refId": "A" },
+            { "expr": "sum(prisma_pool_connections_busy{service_name=~\"$service\"})", "legendFormat": "busy", "refId": "B" },
+            { "expr": "sum(prisma_pool_connections_idle{service_name=~\"$service\"})", "legendFormat": "idle", "refId": "C" }
           ]
         },
         {
           "id": 3,
-          "title": "Process CPU Usage",
+          "title": "Process CPU Usage (hottest pod)",
           "type": "gauge",
           "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -239,18 +263,18 @@ data:
             "defaults": { "unit": "percentunit", "min": 0, "max": 1 }
           },
           "targets": [
-            { "expr": "nodejs_process_cpu_usage_ratio", "refId": "A" }
+            { "expr": "max(nodejs_process_cpu_usage_ratio{service_name=~\"$service\"})", "refId": "A" }
           ]
         },
         {
           "id": 4,
-          "title": "Event Loop Lag (p99)",
+          "title": "Event Loop Lag (p99, worst pod)",
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
-            { "expr": "nodejs_eventloop_lag_p99_ms", "refId": "A" }
+            { "expr": "max(nodejs_eventloop_lag_p99_ms{service_name=~\"$service\"})", "refId": "A" }
           ]
         },
         {
@@ -262,8 +286,8 @@ data:
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_requests_total[1m])) by (operation)",
-              "legendFormat": "{{operation}}",
+              "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\"}[1m])) by (service_name, operation)",
+              "legendFormat": "{{service_name}} / {{operation}}",
               "refId": "A"
             }
           ]
@@ -277,35 +301,36 @@ data:
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_request_duration_ms_sum[1m])) by (operation) / sum(rate(graphql_request_duration_ms_count[1m])) by (operation)",
-              "legendFormat": "{{operation}}",
+              "expr": "sum(rate(graphql_request_duration_ms_sum{service_name=~\"$service\"}[1m])) by (service_name, operation) / sum(rate(graphql_request_duration_ms_count{service_name=~\"$service\"}[1m])) by (service_name, operation)",
+              "legendFormat": "{{service_name}} / {{operation}}",
               "refId": "A"
             }
           ]
         },
         {
           "id": 7,
-          "title": "Process Memory (RSS / Heap Used)",
+          "title": "Process Memory (RSS / Heap Used) by Pod",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "bytes" } },
           "targets": [
-            { "expr": "nodejs_process_memory_rss_bytes", "legendFormat": "rss", "refId": "A" },
-            { "expr": "nodejs_process_memory_heap_used_bytes", "legendFormat": "heap used", "refId": "B" }
+            { "expr": "nodejs_process_memory_rss_bytes{service_name=~\"$service\"}", "legendFormat": "rss {{k8s_pod_name}}", "refId": "A" },
+            { "expr": "nodejs_process_memory_heap_used_bytes{service_name=~\"$service\"}", "legendFormat": "heap used {{k8s_pod_name}}", "refId": "B" }
           ]
         },
         {
           "id": 8,
           "title": "GraphQL Error Rate by Operation",
+          "description": "graphql_errors_total is only created on the first error, so this panel is empty (not zero) until an operation returns errors.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_errors_total[5m])) by (operation)",
-              "legendFormat": "{{operation}}",
+              "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\"}[5m])) by (service_name, operation)",
+              "legendFormat": "{{service_name}} / {{operation}}",
               "refId": "A"
             }
           ]
@@ -840,10 +865,29 @@ data:
     {
       "title": "API RED & Saturation",
       "uid": "api-red",
+      "description": "RED metrics plus DB-pool and container saturation. Use the Service dropdown to pick message-service, issue-service, or both - GraphQL/Prisma series filter on service_name, container/pod series on the container name (which matches the service name).",
       "timezone": "browser",
       "schemaVersion": 39,
       "refresh": "10s",
       "time": { "from": "now-30m", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "service",
+            "label": "Service",
+            "type": "custom",
+            "query": "message-service,issue-service",
+            "multi": true,
+            "includeAll": true,
+            "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+            "options": [
+              { "selected": true, "text": "All", "value": "$__all" },
+              { "selected": false, "text": "message-service", "value": "message-service" },
+              { "selected": false, "text": "issue-service", "value": "issue-service" }
+            ]
+          }
+        ]
+      },
       "panels": [
         {
           "id": 1,
@@ -853,7 +897,7 @@ data:
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
-            { "expr": "sum(rate(graphql_requests_total[5m]))", "refId": "A" }
+            { "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\"}[5m]))", "refId": "A" }
           ]
         },
         {
@@ -865,7 +909,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\"}[5m])) by (le))",
               "refId": "A"
             }
           ]
@@ -893,7 +937,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(graphql_errors_total[5m])) / sum(rate(graphql_requests_total[5m]))",
+              "expr": "(sum(rate(graphql_errors_total{service_name=~\"$service\"}[5m])) or vector(0)) / sum(rate(graphql_requests_total{service_name=~\"$service\"}[5m]))",
               "refId": "A"
             }
           ]
@@ -905,7 +949,7 @@ data:
           "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(prisma_pool_connections_busy)", "refId": "A" }
+            { "expr": "sum(prisma_pool_connections_busy{service_name=~\"$service\"})", "refId": "A" }
           ]
         },
         {
@@ -917,8 +961,8 @@ data:
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_requests_total[5m])) by (operation)",
-              "legendFormat": "{{operation}}",
+              "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\"}[5m])) by (service_name, operation)",
+              "legendFormat": "{{service_name}} / {{operation}}",
               "refId": "A"
             }
           ]
@@ -931,23 +975,24 @@ data:
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
-            { "expr": "histogram_quantile(0.50, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
-            { "expr": "histogram_quantile(0.90, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))", "legendFormat": "p90", "refId": "B" },
-            { "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))", "legendFormat": "p95", "refId": "C" },
-            { "expr": "histogram_quantile(0.99, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le))", "legendFormat": "p99", "refId": "D" }
+            { "expr": "histogram_quantile(0.50, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\"}[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
+            { "expr": "histogram_quantile(0.90, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\"}[5m])) by (le))", "legendFormat": "p90", "refId": "B" },
+            { "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\"}[5m])) by (le))", "legendFormat": "p95", "refId": "C" },
+            { "expr": "histogram_quantile(0.99, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\"}[5m])) by (le))", "legendFormat": "p99", "refId": "D" }
           ]
         },
         {
           "id": 7,
           "title": "Error Rate by Operation",
+          "description": "graphql_errors_total is only created on the first error, so this panel is empty (not zero) until an operation returns errors.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_errors_total[5m])) by (operation)",
-              "legendFormat": "{{operation}}",
+              "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\"}[5m])) by (service_name, operation)",
+              "legendFormat": "{{service_name}} / {{operation}}",
               "refId": "A"
             }
           ]
@@ -960,8 +1005,8 @@ data:
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
-            { "expr": "sum(rate(graphql_requests_total[5m]))", "legendFormat": "requests", "refId": "A" },
-            { "expr": "sum(rate(graphql_errors_total[5m]))", "legendFormat": "errors", "refId": "B" }
+            { "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\"}[5m]))", "legendFormat": "requests", "refId": "A" },
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\"}[5m])) or vector(0)", "legendFormat": "errors", "refId": "B" }
           ]
         },
         {
@@ -973,8 +1018,8 @@ data:
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket[5m])) by (le, operation))",
-              "legendFormat": "{{operation}}",
+              "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\"}[5m])) by (le, service_name, operation))",
+              "legendFormat": "{{service_name}} / {{operation}}",
               "refId": "A"
             }
           ]
@@ -986,9 +1031,9 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(prisma_pool_connections_busy)", "legendFormat": "busy", "refId": "A" },
-            { "expr": "sum(prisma_pool_connections_idle)", "legendFormat": "idle", "refId": "B" },
-            { "expr": "sum(prisma_pool_connections_open)", "legendFormat": "open (capacity)", "refId": "C" }
+            { "expr": "sum(prisma_pool_connections_busy{service_name=~\"$service\"}) by (service_name)", "legendFormat": "busy {{service_name}}", "refId": "A" },
+            { "expr": "sum(prisma_pool_connections_idle{service_name=~\"$service\"}) by (service_name)", "legendFormat": "idle {{service_name}}", "refId": "B" },
+            { "expr": "sum(prisma_pool_connections_open{service_name=~\"$service\"}) by (service_name)", "legendFormat": "open (capacity) {{service_name}}", "refId": "C" }
           ]
         },
         {
@@ -999,8 +1044,8 @@ data:
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
-            { "expr": "prisma_client_queries_duration_avg_ms", "legendFormat": "query duration (avg)", "refId": "A" },
-            { "expr": "prisma_client_queries_wait_avg_ms", "legendFormat": "pool wait (avg)", "refId": "B" }
+            { "expr": "avg(prisma_client_queries_duration_avg_ms{service_name=~\"$service\"}) by (service_name)", "legendFormat": "query duration (avg) {{service_name}}", "refId": "A" },
+            { "expr": "avg(prisma_client_queries_wait_avg_ms{service_name=~\"$service\"}) by (service_name)", "legendFormat": "pool wait (avg) {{service_name}}", "refId": "B" }
           ]
         },
         {
@@ -1012,7 +1057,7 @@ data:
           "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 } },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{container=\"message-service\"}[5m])) by (pod) / sum(rate(container_cpu_cfs_periods_total{container=\"message-service\"}[5m])) by (pod)",
+              "expr": "sum(rate(container_cpu_cfs_throttled_periods_total{container=~\"$service\"}[5m])) by (pod) / sum(rate(container_cpu_cfs_periods_total{container=~\"$service\"}[5m])) by (pod)",
               "legendFormat": "{{pod}}",
               "refId": "A"
             }
@@ -1026,8 +1071,8 @@ data:
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "bytes" } },
           "targets": [
-            { "expr": "sum(container_memory_working_set_bytes{container=\"message-service\"}) by (pod)", "legendFormat": "{{pod}}", "refId": "A" },
-            { "expr": "max(container_spec_memory_limit_bytes{container=\"message-service\"})", "legendFormat": "limit", "refId": "B" }
+            { "expr": "sum(container_memory_working_set_bytes{container=~\"$service\"}) by (pod)", "legendFormat": "{{pod}}", "refId": "A" },
+            { "expr": "max(container_spec_memory_limit_bytes{container=~\"$service\"}) by (container)", "legendFormat": "limit {{container}}", "refId": "B" }
           ]
         },
         {
@@ -1037,8 +1082,8 @@ data:
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
-            { "expr": "sum(increase(kube_pod_container_status_restarts_total{container=\"message-service\"}[15m]))", "legendFormat": "restarts (15m)", "refId": "A" },
-            { "expr": "sum(kube_pod_status_ready{condition=\"true\",pod=~\"message-service.*\"})", "legendFormat": "ready pods", "refId": "B" }
+            { "expr": "sum(increase(kube_pod_container_status_restarts_total{container=~\"$service\"}[15m]))", "legendFormat": "restarts (15m)", "refId": "A" },
+            { "expr": "sum(kube_pod_status_ready{condition=\"true\",namespace=\"default\",pod=~\"$service-.*\"})", "legendFormat": "ready pods", "refId": "B" }
           ]
         }
       ]
