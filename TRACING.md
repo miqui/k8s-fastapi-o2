@@ -111,10 +111,36 @@ curl -X POST localhost:14318/v1/traces -H 'Content-Type: application/json' -d '{
   "startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000050000000"}]}]}]}'
 ```
 
-**Services → OpenObserve (not yet verified at the time of writing).** Both services typecheck
-(`npx tsc --noEmit`), and their ConfigMaps had synced via ArgoCD, but the pods were still on the
-pre-tracing image. Once CI has built the new images and Image Updater has rolled the pods, check
-that spans arrive:
+**Services → OpenObserve (verified live, 2026-09-21).** After the rollout (all six pods on the
+`…-63b83d8` image tag, 0 restarts), 150 read-only GraphQL queries were sent to each service via
+`kubectl port-forward` (`TraceCheckMessages` / `TraceCheckIssue`). Results:
+
+- **Both services arrived:** 441 spans / 19 traces for `message-service`, 252 spans / 14 traces for
+  `issue-service`.
+- **Sampling matched the config:** 16 and 14 of 150 requests were sampled (~10% at
+  `OTEL_TRACES_SAMPLER_ARG: "0.1"`).
+- **Health probes are excluded:** 0 spans with `health` in the operation name, despite kubelet
+  probing every few seconds.
+- **Spans nest as intended** — HTTP → GraphQL operation → resolver → Prisma:
+
+  ```
+  - POST
+    - query TraceCheckMessages
+      - graphql.resolve authors
+        - prisma:client:operation
+          - prisma:engine:query → connection, db_query, serialize, response_json_serialization
+        - graphql.resolve authors.*.id
+      - graphql.resolve messages
+        - prisma:client:operation …
+  ```
+
+  `mergeItems` is working (`authors.*.id` is one span, not one per author).
+- **Quirk:** when a query resolves two Prisma operations concurrently (issue-service's
+  `workspace` + `issue`), the `prisma:engine:*` spans can be attached under a sibling operation
+  rather than the one that issued them. The span counts and durations are still right; only the
+  parent link is off.
+
+To repeat the check:
 
 ```bash
 # pods should be newer than the merge
