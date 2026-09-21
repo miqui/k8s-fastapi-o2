@@ -1,3 +1,4 @@
+import { type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 import { Client } from "hazelcast-client";
 
 /**
@@ -21,6 +22,31 @@ const MAP_NAME = "messages";
 
 let client: Client | undefined;
 
+// Uses the global tracer provider registered in src/tracing.ts - a no-op until that runs.
+const tracer = trace.getTracer("message-service");
+
+// Hazelcast has no OpenTelemetry instrumentation, so each cache call gets a manual span
+// (a child of the GraphQL resolver span). Without them a cache hit shows up in a trace as a
+// resolver with no Prisma spans, and the network hop to the Hazelcast member is an
+// unexplained gap inside the resolver's duration.
+async function traced<T>(operation: string, fn: (span: Span) => Promise<T>): Promise<T> {
+  return tracer.startActiveSpan(
+    `hazelcast.${operation}`,
+    { attributes: { "db.system": "hazelcast", "db.operation": operation, "cache.map": MAP_NAME } },
+    async (span) => {
+      try {
+        return await fn(span);
+      } catch (err) {
+        span.recordException(err as Error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: (err as Error).message });
+        throw err;
+      } finally {
+        span.end();
+      }
+    },
+  );
+}
+
 export async function connectCache(host: string, port: string): Promise<void> {
   client = await Client.newHazelcastClient({
     clusterName: CACHE_NAME,
@@ -37,21 +63,31 @@ export function isCacheConnected(): boolean {
 
 export async function getCachedMessage<T>(id: string): Promise<T | null> {
   if (!client) return null;
-  const map = await client.getMap<string, string>(MAP_NAME);
-  const raw = await map.get(id);
-  return raw ? (JSON.parse(raw) as T) : null;
+  const hz = client;
+  return traced("get", async (span) => {
+    const map = await hz.getMap<string, string>(MAP_NAME);
+    const raw = await map.get(id);
+    span.setAttribute("cache.hit", Boolean(raw));
+    return raw ? (JSON.parse(raw) as T) : null;
+  });
 }
 
 export async function setCachedMessage(id: string, value: unknown): Promise<void> {
   if (!client) return;
-  const map = await client.getMap<string, string>(MAP_NAME);
-  await map.set(id, JSON.stringify(value));
+  const hz = client;
+  await traced("set", async () => {
+    const map = await hz.getMap<string, string>(MAP_NAME);
+    await map.set(id, JSON.stringify(value));
+  });
 }
 
 export async function evictCachedMessage(id: string): Promise<void> {
   if (!client) return;
-  const map = await client.getMap<string, string>(MAP_NAME);
-  await map.delete(id);
+  const hz = client;
+  await traced("delete", async () => {
+    const map = await hz.getMap<string, string>(MAP_NAME);
+    await map.delete(id);
+  });
 }
 
 export async function shutdownCache(): Promise<void> {
