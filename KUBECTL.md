@@ -118,3 +118,57 @@ kubectl get pods --all-namespaces -o wide
 Turned out both counts were correct: `kubectl`/Headlamp count all 50 pod objects, while Grafana's
 panel filters on `phase="Running"`, excluding the 2 `Completed` `ingress-nginx-admission-*` Job pods
 (50 − 2 = 48).
+
+## Diagnosing `argocd-repo-server` liveness probe failures
+
+Symptom: `Liveness probe failed: Get "http://<ip>:8084/healthz?full=true": context deadline exceeded`
+and a few restarts (exit code 0). The pod was otherwise healthy (about 2m CPU / 38Mi, no resource limits).
+
+```bash
+kubectl get pod -n argocd -l app.kubernetes.io/name=argocd-repo-server -o wide   # RESTARTS column
+kubectl describe pod -n argocd -l app.kubernetes.io/name=argocd-repo-server       # probe settings, Last State, Events
+kubectl get events -n argocd --sort-by=.lastTimestamp
+kubectl top pod -n argocd
+```
+
+Reading the repo-server logs (JSON; address the Deployment so it survives pod renames):
+
+```bash
+kubectl logs -n argocd deploy/argocd-repo-server
+kubectl logs -n argocd deploy/argocd-repo-server -f --tail=50
+kubectl logs -n argocd deploy/argocd-repo-server --previous                       # before a liveness restart
+kubectl logs -n argocd deploy/argocd-repo-server --since=1h
+kubectl logs -n argocd deploy/argocd-repo-server | grep '"level":"error"'
+kubectl logs -n argocd deploy/argocd-repo-server | grep -v 'grpc.health.v1.Health' # drop health-check noise
+kubectl logs -n argocd deploy/argocd-repo-server | grep healthcheck               # the probe-side failures
+kubectl logs -n argocd deploy/argocd-repo-server --since=1h | jq -r '[.time,.level,.msg] | @tsv'
+```
+
+The tell-tale line is `Error serving health check request ... context canceled` with
+`"duration":5004874461`: the health check normally answers in about 1ms, and here it ran into the
+probe's `timeoutSeconds: 5`. That points at a stall around the process (CPU or memory contention in
+the Docker VM), not at repo-server being slow.
+
+Checking the Docker Desktop VM (kind runs inside it):
+
+```bash
+docker info | grep -E 'CPUs|Total Memory'
+docker stats --no-stream
+docker run --rm --privileged --pid=host alpine sh -c 'cat /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io; free -m'
+kubectl top nodes
+```
+
+In the PSI output, `some avg60` above roughly 10% on `cpu` means tasks are regularly waiting for CPU,
+and swap in use on the `free -m` line means pages are being swapped out. Both were true here
+(CPU `some` ~17%, ~465 MB swapped). The fix is more VM memory (Docker Desktop → Settings →
+Resources) and/or fewer kind workers.
+
+Loosening the liveness probe (about 60s of tolerated stall instead of about 15s) is an option if the
+restarts are a nuisance. Not applied here:
+
+```bash
+kubectl patch deployment argocd-repo-server -n argocd --type=json -p='[
+  {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/timeoutSeconds","value":10},
+  {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/failureThreshold","value":6}
+]'
+```
