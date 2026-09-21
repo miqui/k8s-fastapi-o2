@@ -246,6 +246,9 @@ CLI pinned to `v1.19.1` (SHA-256-checked) to match the Helm chart; bump the two 
 
 ### Working with the policies
 
+A `kubectl` cheat sheet for debugging denials, audit findings and Kyverno itself is in
+[KYVERNO.md](KYVERNO.md).
+
 - **Reports**: audit findings, and exceptions applied, appear in Kyverno's policy reports
   (`kubectl get policyreport -A`, plus `kubectl get clusterpolicyreport` for cluster-scoped ones).
 - **New image**: add its repository to `allowed` in `k8s/policies/rules/restrict-image-repositories.yaml`
