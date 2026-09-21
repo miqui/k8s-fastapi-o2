@@ -25,15 +25,15 @@ export const options = {
 const BASE_URL = __ENV.BASE_URL || 'http://localhost/graphql';
 const jsonHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
 
-const CREATE_AUTHOR_MUTATION = `mutation ($input: CreateAuthorInput!) { createAuthor(input: $input) { id } }`;
+const CREATE_AUTHOR_MUTATION = `mutation CreateAuthor($input: CreateAuthorInput!) { createAuthor(input: $input) { id } }`;
 const CREATE_MESSAGE_MUTATION = `
-  mutation ($input: CreateMessageInput!) { createMessage(input: $input) { id } }
+  mutation CreateMessage($input: CreateMessageInput!) { createMessage(input: $input) { id } }
 `;
-const GET_COUNTER_QUERY = `query ($id: ID!) { message(id: $id) { content version } }`;
+const GET_COUNTER_QUERY = `query GetCounter($id: ID!) { message(id: $id) { content version } }`;
 const INCREMENT_MUTATION = `
-  mutation ($id: ID!, $input: UpdateMessageInput!) { updateMessage(id: $id, input: $input) { id version content } }
+  mutation IncrementCounter($id: ID!, $input: UpdateMessageInput!) { updateMessage(id: $id, input: $input) { id version content } }
 `;
-const DELETE_MESSAGE_MUTATION = `mutation ($id: ID!) { deleteMessage(id: $id) }`;
+const DELETE_MESSAGE_MUTATION = `mutation DeleteMessage($id: ID!) { deleteMessage(id: $id) }`;
 
 const successfulIncrements = new Counter('successful_increments');
 const writeConflicts = new Counter('write_conflicts');
