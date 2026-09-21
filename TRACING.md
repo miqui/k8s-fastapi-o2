@@ -17,9 +17,15 @@ issue-service  ──┘   /v1/traces           /api/default/v1/traces
 | HTTP server | `@opentelemetry/instrumentation-http` | One span per request. `/health/*` (kubelet probes) is ignored. |
 | GraphQL | `@opentelemetry/instrumentation-graphql` | One span per operation (named after it), with parse / validate / execute below it. |
 | Database | `@prisma/instrumentation` | `prisma:client:operation` and `prisma:engine:*` spans — the DB side of each request. |
+| Cache (message-service only) | manual spans in `src/cache.ts` | `hazelcast.get` / `hazelcast.set` / `hazelcast.delete`, each with `db.system=hazelcast`, `db.operation` and `cache.map`; `get` also sets `cache.hit` (true/false). |
 
-Not traced: Hazelcast cache calls (`src/cache.ts`), and the two services never call each other, so
-there is no cross-service trace — each API produces its own traces.
+The Hazelcast client has no OpenTelemetry instrumentation, hence the hand-written `traced()` wrapper
+in `src/cache.ts`. It matters for the `message(id)` query, a cache-aside read: on a hit the trace
+has no `prisma:*` spans at all, and without a `hazelcast.get` span the hop to the (separate)
+Hazelcast pod is an unexplained gap inside the resolver span. issue-service has no cache.
+
+The two services never call each other, so there is no cross-service trace — each API produces its
+own traces.
 
 ## Code
 
