@@ -549,15 +549,22 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
 `observability` namespace) and waits for it to roll out. Once deployed:
 
 - **Grafana**: `http://grafana.localhost/` — log in with credentials configured via Secrets / 1Password (see
-  `k8s/observability/grafana-secret.yaml`) and open one of six
+  `k8s/observability/grafana-secret.yaml`) and open one of eight
   pre-provisioned dashboards, all in `k8s/observability/grafana-dashboard-json-configmap.yaml` as plain
   PromQL against real, verified metric names - if you add new panels, check the exact metric names
   Prometheus actually stores first (they differ from the raw OTLP names — see below):
-  - **API RED & Saturation**: the caller's-eye view of `message-service` - GraphQL request
-    rate/latency percentiles/errors by operation, Prisma connection-pool saturation, CPU throttling,
+  - **API RED & Saturation**: the caller's-eye view of an API - GraphQL request
+    rate/latency percentiles/errors by root field, Prisma connection-pool saturation, CPU throttling,
     memory vs. limit, restarts/readiness - see [API RED & Saturation Dashboard](#api-red--saturation-dashboard) below.
-  - **graphql-api**: app-level request rate/latency by operation, event-loop lag, process memory,
+  - **graphql-api**: app-level request rate/latency by root field, event-loop lag, process memory,
     Prisma connection-pool stats.
+  - **GraphQL Operations** / **GraphQL Errors**: traffic, latency and errors per *schema* operation
+    (query/mutation and root field) and per `extensions.code` - see
+    [GraphQL Operation & Error Dashboards](#graphql-operation--error-dashboards) below.
+
+  `api-red`, `graphql-api`, `GraphQL Operations` and `GraphQL Errors` share a **Service** dropdown
+  (`message-service`, `issue-service`, or both) - the two APIs push identically named metrics through
+  the same collector, told apart only by the `service_name` label.
   - **kind cluster ops**: cluster-wide node/pod health - nodes ready, pod phases/restarts, per-node
     CPU/memory/disk (via node-exporter), per-namespace container CPU/memory (via cAdvisor).
   - **PostgreSQL Ops & Queries**: connections, transaction/tuple rates, buffer cache hit ratio,
@@ -708,19 +715,49 @@ escaping entirely. Key metrics used: `com_hazelcast_metrics_size{prefix="cluster
 `evictioncount`/`expirationcount` (all `prefix="map"`, per-map via `tag0`), and
 `usedheap`/`committedheap`/`maxheap` (`prefix="memory"`).
 
+### GraphQL Operation & Error Dashboards
+
+`graphql-operations.json` and `graphql-errors.json` break the `graphql_*` metrics down by what the
+**schema** says, not by what the client chose to call things. Both services' `metricsPlugin`
+(`src/telemetry.ts`, `issue-service/src/telemetry.ts`) label `graphql_requests_total`,
+`graphql_request_duration_ms` and `graphql_errors_total` with:
+
+| Label | Values | Notes |
+| :--- | :--- | :--- |
+| `operation_type` | `query`, `mutation`, `unresolved` | `unresolved` = the request failed parse/validation before an operation was picked. |
+| `root_field` | e.g. `messages`, `createMessage`, `moveIssue`, `__schema`, `unresolved` | The schema field name (aliases are resolved), looking through fragments at the root. |
+| `error_code` (errors only) | `NOT_FOUND`, `CONFLICT`, `BAD_USER_INPUT`, `GRAPHQL_VALIDATION_FAILED`, `GRAPHQL_PARSE_FAILED`, `INTERNAL_SERVER_ERROR`, ... | From `extensions.code`, so it's a small closed set. |
+
+- **Why not the client's `operationName`?** That was the previous `operation` label. It's
+  client-controlled, so anyone can mint new series at will (the collector and OpenObserve both pay for
+  that - OpenObserve has already overflowed its MemTable once), and unnamed operations - which is what
+  every k6 script sent - all collapsed into `anonymous`. Schema root fields are bounded and always
+  present. Named operations are still visible in traces.
+- **Multi-root-field operations** (`query { messages { ... } authors { ... } }`) increment the
+  request counter and record their full duration once *per root field*, so a per-field breakdown
+  can sum to more than the number of HTTP requests.
+- **Errors are attributed to the field that failed**, using the error's `path` (its first segment is
+  the root field's response key, so aliases work). An error with no path - e.g. a missing required
+  variable (`BAD_USER_INPUT`) - counts against every root field of that operation. GraphQL errors
+  ride in HTTP 200 responses, so none of this is visible as HTTP 5xx.
+- `graphql_errors_total` is only created on the first error (an OTel counter emits nothing until
+  its first `.add()`), so panels built directly on it are empty - not zero - on a healthy system.
+  The ratio and total panels use `or vector(0)`; the by-code panels show "No errors".
+
 ### API RED & Saturation Dashboard
 
 `api-red.json`'s panels follow the standard [RED method](https://grafana.com/blog/2018/08/02/the-red-method-how-to-instrument-your-services/)
 (**R**ate, **E**rrors, **D**uration) plus enough saturation signal to explain *why* rate/errors/
-duration are moving, scoped to `message-service` and its direct dependencies:
+duration are moving, for the API(s) picked in the **Service** dropdown and their direct dependencies:
 
-- **Rate**: `graphql_requests_total` overall and broken down by GraphQL `operation` name (the
-  `operationName` sent with the request - see the `metricsPlugin` in `src/telemetry.ts`).
-- **Duration**: p50/p90/p95/p99 latency (overall and per-operation) from
+- **Rate**: `graphql_requests_total` overall and broken down by GraphQL root field (see
+  [GraphQL Operation & Error Dashboards](#graphql-operation--error-dashboards) and the `metricsPlugin`
+  in `src/telemetry.ts`).
+- **Duration**: p50/p90/p95/p99 latency (overall and per-root-field) from
   `graphql_request_duration_ms`.
-- **Errors**: overall error ratio (gauge, thresholds at 1%/5%) and error rate by operation, both from
+- **Errors**: overall error ratio (gauge, thresholds at 1%/5%) and error rate by root field, both from
   `graphql_errors_total` - a request counts as an error whenever its GraphQL response includes a
-  non-empty `errors[]` array, regardless of extensions.code.
+  non-empty `errors[]` array; the breakdown by `extensions.code` lives on the GraphQL Errors dashboard.
 - **Saturation**: Prisma connection-pool utilization (busy/idle/open) and average query/pool-wait
   duration (`prisma_pool_connections_*` / `prisma_client_queries_*`, sampled from
   `prisma.$metrics.json()` - see `registerPrismaMetrics` in `src/telemetry.ts`), CPU throttling
@@ -754,6 +791,11 @@ below work with any of them - just swap the filename.
 | `k6-message-lifecycle.js` | Full CRUD per iteration: `createMessage` -> `message` -> `updateMessage` -> `deleteMessage`. |
 | `k6-invalid-requests.js` | Negative paths: invalid create (`BAD_USER_INPUT`), missing id (`NOT_FOUND`), a missing required GraphQL variable (request-level validation error, HTTP 400) - see [GraphQL API](#graphql-api). |
 | `k6-transaction-isolation.js` | Concurrency/lost-update regression test for `updateMessage`'s optimistic locking - see [Concurrency & Transaction Isolation](#concurrency--transaction-isolation). |
+
+Every GraphQL document the scripts send is a *named* operation (`CreateAuthor`, `CreateMessage`,
+`GetMessage`, `UpdateMessage`, `DeleteMessage`, `ListMessages`, `GetCounter`, `IncrementCounter`), so
+load-test traffic is identifiable in traces and logs. Metrics and the Grafana dashboards break
+traffic down by schema root field (`createMessage`, `message`, ...), not by these names.
 
 ### Prerequisites
 

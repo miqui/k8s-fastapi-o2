@@ -279,30 +279,30 @@ data:
         },
         {
           "id": 5,
-          "title": "GraphQL Request Rate by Operation",
+          "title": "GraphQL Request Rate by Root Field",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\"}[1m])) by (service_name, operation)",
-              "legendFormat": "{{service_name}} / {{operation}}",
+              "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\"}[1m])) by (service_name, root_field)",
+              "legendFormat": "{{service_name}} / {{root_field}}",
               "refId": "A"
             }
           ]
         },
         {
           "id": 6,
-          "title": "GraphQL Average Request Latency",
+          "title": "GraphQL Average Request Latency by Root Field",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_request_duration_ms_sum{service_name=~\"$service\"}[1m])) by (service_name, operation) / sum(rate(graphql_request_duration_ms_count{service_name=~\"$service\"}[1m])) by (service_name, operation)",
-              "legendFormat": "{{service_name}} / {{operation}}",
+              "expr": "sum(rate(graphql_request_duration_ms_sum{service_name=~\"$service\"}[1m])) by (service_name, root_field) / sum(rate(graphql_request_duration_ms_count{service_name=~\"$service\"}[1m])) by (service_name, root_field)",
+              "legendFormat": "{{service_name}} / {{root_field}}",
               "refId": "A"
             }
           ]
@@ -321,7 +321,7 @@ data:
         },
         {
           "id": 8,
-          "title": "GraphQL Error Rate by Operation",
+          "title": "GraphQL Error Rate by Root Field",
           "description": "graphql_errors_total is only created on the first error, so this panel is empty (not zero) until an operation returns errors.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
@@ -329,8 +329,8 @@ data:
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\"}[5m])) by (service_name, operation)",
-              "legendFormat": "{{service_name}} / {{operation}}",
+              "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\"}[5m])) by (service_name, root_field)",
+              "legendFormat": "{{service_name}} / {{root_field}}",
               "refId": "A"
             }
           ]
@@ -954,15 +954,15 @@ data:
         },
         {
           "id": 5,
-          "title": "Request Rate by Operation",
+          "title": "Request Rate by Root Field",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\"}[5m])) by (service_name, operation)",
-              "legendFormat": "{{service_name}} / {{operation}}",
+              "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\"}[5m])) by (service_name, root_field)",
+              "legendFormat": "{{service_name}} / {{root_field}}",
               "refId": "A"
             }
           ]
@@ -983,7 +983,7 @@ data:
         },
         {
           "id": 7,
-          "title": "Error Rate by Operation",
+          "title": "Error Rate by Root Field",
           "description": "graphql_errors_total is only created on the first error, so this panel is empty (not zero) until an operation returns errors.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
@@ -991,8 +991,8 @@ data:
           "fieldConfig": { "defaults": { "unit": "reqps" } },
           "targets": [
             {
-              "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\"}[5m])) by (service_name, operation)",
-              "legendFormat": "{{service_name}} / {{operation}}",
+              "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\"}[5m])) by (service_name, root_field)",
+              "legendFormat": "{{service_name}} / {{root_field}}",
               "refId": "A"
             }
           ]
@@ -1011,15 +1011,15 @@ data:
         },
         {
           "id": 9,
-          "title": "Latency by Operation (p95)",
+          "title": "Latency by Root Field (p95)",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "ms" } },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\"}[5m])) by (le, service_name, operation))",
-              "legendFormat": "{{service_name}} / {{operation}}",
+              "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\"}[5m])) by (le, service_name, root_field))",
+              "legendFormat": "{{service_name}} / {{root_field}}",
               "refId": "A"
             }
           ]
@@ -1084,6 +1084,314 @@ data:
           "targets": [
             { "expr": "sum(increase(kube_pod_container_status_restarts_total{container=~\"$service\"}[15m]))", "legendFormat": "restarts (15m)", "refId": "A" },
             { "expr": "sum(kube_pod_status_ready{condition=\"true\",namespace=\"default\",pod=~\"$service-.*\"})", "legendFormat": "ready pods", "refId": "B" }
+          ]
+        }
+      ]
+    }
+  graphql-operations.json: |
+    {
+      "title": "GraphQL Operations",
+      "uid": "graphql-operations",
+      "description": "Traffic and latency per schema operation: operation type (query/mutation) and root field (e.g. messages, createMessage, moveIssue) - bounded by the schema, unlike client-supplied operation names. Requests that fail parse/validation appear as operation_type/root_field 'unresolved'. A multi-root-field operation counts once per root field.",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "templating": {
+        "list": [
+          { "name": "service", "label": "Service", "type": "custom", "query": "message-service,issue-service", "multi": true, "includeAll": true, "current": { "selected": true, "text": ["All"], "value": ["$__all"] }, "options": [{ "selected": true, "text": "All", "value": "$__all" }, { "selected": false, "text": "message-service", "value": "message-service" }, { "selected": false, "text": "issue-service", "value": "issue-service" }] },
+          { "name": "operation_type", "label": "Operation type", "type": "custom", "query": "query,mutation,unresolved", "multi": true, "includeAll": true, "current": { "selected": true, "text": ["All"], "value": ["$__all"] }, "options": [{ "selected": true, "text": "All", "value": "$__all" }, { "selected": false, "text": "query", "value": "query" }, { "selected": false, "text": "mutation", "value": "mutation" }, { "selected": false, "text": "unresolved", "value": "unresolved" }] },
+          { "name": "root_field", "label": "Root field", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" }, "query": { "query": "label_values(graphql_requests_total{service_name=~\"$service\"}, root_field)", "refId": "PrometheusVariableQueryEditor-VariableQuery" }, "definition": "label_values(graphql_requests_total{service_name=~\"$service\"}, root_field)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": { "selected": true, "text": ["All"], "value": ["$__all"] } }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Root-field Requests/s",
+          "description": "Total request rate for the selected services, operation types and root fields. Counted once per root field of each operation, so a request selecting two root fields appears under both.",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m]))", "refId": "A" }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Mutation Share",
+          "description": "Share of requests that are mutations (writes).",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+          "targets": [
+            { "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\",operation_type=\"mutation\"}[5m])) / sum(rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m]))", "refId": "A" }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "p95 Latency",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms" } },
+          "targets": [
+            { "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m])) by (le))", "refId": "A" }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "p99 Latency",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms" } },
+          "targets": [
+            { "expr": "histogram_quantile(0.99, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m])) by (le))", "refId": "A" }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Error Ratio",
+          "description": "Errors / requests. Includes client-caused errors (NOT_FOUND, BAD_USER_INPUT, CONFLICT); see the GraphQL Errors dashboard for the breakdown by code.",
+          "type": "gauge",
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.01 }, { "color": "red", "value": 0.05 }] } } },
+          "targets": [
+            { "expr": "(sum(rate(graphql_errors_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m])) or vector(0)) / sum(rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m]))", "refId": "A" }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Active Root Fields",
+          "description": "Number of distinct root fields that received traffic in the last 5 minutes.",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "expr": "count(sum by (root_field) (rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m])) > 0) or vector(0)", "refId": "A" }
+          ]
+        },
+        {
+          "id": 7,
+          "title": "Request Rate by Root Field",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m])) by (service_name, root_field)", "legendFormat": "{{service_name}} / {{root_field}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 8,
+          "title": "Query vs Mutation Rate",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m])) by (service_name, operation_type)", "legendFormat": "{{service_name}} / {{operation_type}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 9,
+          "title": "p95 Latency by Root Field",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms" } },
+          "targets": [
+            { "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m])) by (le, service_name, root_field))", "legendFormat": "{{service_name}} / {{root_field}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 10,
+          "title": "Average Latency by Root Field",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_request_duration_ms_sum{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m])) by (service_name, root_field) / sum(rate(graphql_request_duration_ms_count{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[5m])) by (service_name, root_field)", "legendFormat": "{{service_name}} / {{root_field}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "Latency Distribution",
+          "description": "Where request durations land across the histogram buckets (5 ms to 10 s) for the current selection. A second hump usually means a slow path (cache miss, N+1) mixed into fast traffic.",
+          "type": "heatmap",
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "options": { "calculate": false, "yAxis": { "unit": "ms" }, "cellGap": 1, "color": { "scheme": "Spectral", "mode": "scheme" } },
+          "targets": [
+            { "expr": "sum(increase(graphql_request_duration_ms_bucket{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[$__rate_interval])) by (le)", "legendFormat": "{{le}}", "format": "heatmap", "refId": "A" }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "Root Field Summary (current window)",
+          "description": "One row per (service, root field) over the selected time range: request rate, p95 latency and error ratio.",
+          "type": "table",
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 29 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "overrides": [{ "matcher": { "id": "byName", "options": "req/s" }, "properties": [{ "id": "unit", "value": "reqps" }, { "id": "decimals", "value": 2 }] }, { "matcher": { "id": "byName", "options": "p95 (ms)" }, "properties": [{ "id": "unit", "value": "ms" }, { "id": "decimals", "value": 1 }] }, { "matcher": { "id": "byName", "options": "error ratio" }, "properties": [{ "id": "unit", "value": "percentunit" }, { "id": "decimals", "value": 2 }] }] },
+          "transformations": [{ "id": "joinByField", "options": { "byField": "root_field", "mode": "outer" } }, { "id": "organize", "options": { "excludeByName": { "Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "service_name 1": true, "service_name 2": true }, "renameByName": { "Value #A": "req/s", "Value #B": "p95 (ms)", "Value #C": "error ratio", "service_name 3": "service", "service_name": "service", "root_field": "root field" } } }, { "id": "sortBy", "options": { "fields": {}, "sort": [{ "field": "req/s", "desc": true }] } }],
+          "targets": [
+            { "expr": "sum(rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[$__range])) by (service_name, root_field)", "format": "table", "instant": true, "refId": "A" },
+            { "expr": "histogram_quantile(0.95, sum(rate(graphql_request_duration_ms_bucket{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[$__range])) by (le, service_name, root_field))", "format": "table", "instant": true, "refId": "B" },
+            { "expr": "(sum(rate(graphql_errors_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[$__range])) by (service_name, root_field) or (sum(rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[$__range])) by (service_name, root_field) * 0)) / sum(rate(graphql_requests_total{service_name=~\"$service\",operation_type=~\"$operation_type\",root_field=~\"$root_field\"}[$__range])) by (service_name, root_field)", "format": "table", "instant": true, "refId": "C" }
+          ]
+        }
+      ]
+    }
+  graphql-errors.json: |
+    {
+      "title": "GraphQL Errors",
+      "uid": "graphql-errors",
+      "description": "GraphQL errors ride in HTTP 200 responses, so they never show up as HTTP 5xx. This breaks them down by extensions.code (NOT_FOUND, CONFLICT, BAD_USER_INPUT, GRAPHQL_VALIDATION_FAILED, GRAPHQL_PARSE_FAILED, INTERNAL_SERVER_ERROR) and by the root field that failed. Panels are empty, not zero, until an error has occurred: the counter is only created on the first error.",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "templating": {
+        "list": [
+          { "name": "service", "label": "Service", "type": "custom", "query": "message-service,issue-service", "multi": true, "includeAll": true, "current": { "selected": true, "text": ["All"], "value": ["$__all"] }, "options": [{ "selected": true, "text": "All", "value": "$__all" }, { "selected": false, "text": "message-service", "value": "message-service" }, { "selected": false, "text": "issue-service", "value": "issue-service" }] },
+          { "name": "root_field", "label": "Root field", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" }, "query": { "query": "label_values(graphql_requests_total{service_name=~\"$service\"}, root_field)", "refId": "PrometheusVariableQueryEditor-VariableQuery" }, "definition": "label_values(graphql_requests_total{service_name=~\"$service\"}, root_field)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": { "selected": true, "text": ["All"], "value": ["$__all"] } },
+          { "name": "error_code", "label": "Error code", "type": "query", "datasource": { "type": "prometheus", "uid": "prometheus" }, "query": { "query": "label_values(graphql_errors_total{service_name=~\"$service\"}, error_code)", "refId": "PrometheusVariableQueryEditor-VariableQuery" }, "definition": "label_values(graphql_errors_total{service_name=~\"$service\"}, error_code)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": { "selected": true, "text": ["All"], "value": ["$__all"] } }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Error Ratio",
+          "description": "Errors / requests for the selected codes. Client-caused codes (NOT_FOUND, CONFLICT, BAD_USER_INPUT, validation, parse) count too; watch 'Server Errors/s' for genuine faults.",
+          "type": "gauge",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.01 }, { "color": "red", "value": 0.05 }] } } },
+          "targets": [
+            { "expr": "(sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=~\"$error_code\"}[5m])) or vector(0)) / sum(rate(graphql_requests_total{service_name=~\"$service\",root_field=~\"$root_field\"}[5m]))", "refId": "A" }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Errors/s",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=~\"$error_code\"}[5m])) or vector(0)", "refId": "A" }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Server Errors/s",
+          "description": "INTERNAL_SERVER_ERROR / UNKNOWN: unhandled resolver exceptions, i.e. bugs or dependency failures rather than bad requests. Should stay at 0.",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.001 }] } } },
+          "targets": [
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=~\"INTERNAL_SERVER_ERROR|UNKNOWN\"}[5m])) or vector(0)", "refId": "A" }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Conflicts/s",
+          "description": "CONFLICT: optimistic-lock version mismatches (updateMessage) and deleteAuthor/attachLabel constraint conflicts. Expected under concurrent writes (see k6-transaction-isolation.js).",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=\"CONFLICT\"}[5m])) or vector(0)", "refId": "A" }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Errors by Code",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops", "noValue": "No errors", "custom": { "fillOpacity": 30, "stacking": { "mode": "normal" } } } },
+          "targets": [
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=~\"$error_code\"}[5m])) by (error_code)", "legendFormat": "{{error_code}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Error Ratio by Root Field",
+          "description": "Only root fields that have errored appear.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "noValue": "No errors" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=~\"$error_code\"}[5m])) by (service_name, root_field) / sum(rate(graphql_requests_total{service_name=~\"$service\",root_field=~\"$root_field\"}[5m])) by (service_name, root_field)", "legendFormat": "{{service_name}} / {{root_field}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 7,
+          "title": "Errors by Root Field and Code",
+          "description": "Errors are attributed to the root field named in the error's path; errors with no path (e.g. variable coercion failures) count against every root field of the operation.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops", "noValue": "No errors" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=~\"$error_code\"}[5m])) by (service_name, root_field, error_code)", "legendFormat": "{{service_name}} / {{root_field}} / {{error_code}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 8,
+          "title": "Conflict Ratio by Root Field",
+          "description": "Share of each root field's requests that ended in a CONFLICT.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "noValue": "No errors" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=\"CONFLICT\"}[5m])) by (service_name, root_field) / sum(rate(graphql_requests_total{service_name=~\"$service\",root_field=~\"$root_field\"}[5m])) by (service_name, root_field)", "legendFormat": "{{service_name}} / {{root_field}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 9,
+          "title": "Client Input Errors (bad input, validation, parse)",
+          "description": "Requests rejected before or during execution because of what the client sent. Validation and parse failures appear under root_field 'unresolved'.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops", "noValue": "No errors" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=~\"BAD_USER_INPUT|GRAPHQL_VALIDATION_FAILED|GRAPHQL_PARSE_FAILED\"}[5m])) by (service_name, error_code)", "legendFormat": "{{service_name}} / {{error_code}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 10,
+          "title": "NOT_FOUND by Root Field",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ops", "noValue": "No errors" } },
+          "targets": [
+            { "expr": "sum(rate(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=\"NOT_FOUND\"}[5m])) by (service_name, root_field)", "legendFormat": "{{service_name}} / {{root_field}}", "refId": "A" }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "Error Totals (current window)",
+          "description": "Error counts per (service, root field, code) over the selected time range.",
+          "type": "table",
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 28 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "overrides": [{ "matcher": { "id": "byName", "options": "errors" }, "properties": [{ "id": "decimals", "value": 0 }] }] },
+          "transformations": [{ "id": "organize", "options": { "excludeByName": { "Time": true }, "renameByName": { "Value": "errors", "service_name": "service", "root_field": "root field", "error_code": "code" } } }, { "id": "sortBy", "options": { "fields": {}, "sort": [{ "field": "errors", "desc": true }] } }],
+          "targets": [
+            { "expr": "sum(increase(graphql_errors_total{service_name=~\"$service\",root_field=~\"$root_field\",error_code=~\"$error_code\"}[$__range])) by (service_name, root_field, error_code)", "format": "table", "instant": true, "refId": "A" }
           ]
         }
       ]

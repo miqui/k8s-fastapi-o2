@@ -4,6 +4,8 @@ import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { MeterProvider, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import type { ApolloServerPlugin } from "@apollo/server";
+import { Kind } from "graphql";
+import type { DocumentNode, OperationDefinitionNode, SelectionSetNode } from "graphql";
 import type { PrismaClient } from "@prisma/client";
 
 // Pushes metrics as OTLP to the same OTel Collector the old Micrometer/OTLP registry
@@ -33,16 +35,22 @@ const meter = meterProvider.getMeter("message-service");
 // already spells out "_ms" (confirmed live: `graphql_request_duration_ms_milliseconds_bucket`).
 // Names already carry their unit, so unit hints are intentionally left off everywhere.
 
-// Replaces http.server.requests (Micrometer) - labeled by GraphQL operation name
-// instead of HTTP method+route, since every request here is POST /graphql.
+// Replaces http.server.requests (Micrometer) - labeled by the schema's own operation type
+// and root field (see metricsPlugin) instead of HTTP method+route, since every request here
+// is POST /graphql. Deliberately NOT labeled by the client-supplied operationName: it's
+// unbounded (any client can invent names), which would let callers grow the series count
+// in the collector and in OpenObserve at will.
 const graphqlRequestCounter = meter.createCounter("graphql_requests_total", {
-  description: "Count of GraphQL operations executed",
+  description:
+    "Count of GraphQL operations executed, incremented once per root field of the operation",
 });
 const graphqlErrorCounter = meter.createCounter("graphql_errors_total", {
-  description: "Count of GraphQL operations that returned at least one error",
+  description:
+    "Count of GraphQL operations that returned errors, once per root field and distinct error code",
 });
 const graphqlRequestDuration = meter.createHistogram("graphql_request_duration_ms", {
-  description: "GraphQL operation duration in milliseconds",
+  description:
+    "GraphQL operation duration in milliseconds; a multi-root-field operation records its full duration once per root field",
 });
 
 // Replaces JVM thread/GC pressure signals - there's no JVM anymore, so event-loop lag
@@ -113,19 +121,86 @@ export function registerPrismaMetrics(prisma: PrismaClient): void {
   );
 }
 
+// Root fields of the operation, as response key (the alias if there is one) -> schema field
+// name, looking through inline fragments and fragment spreads. Only called from
+// didResolveOperation, i.e. after validation: every field name is a real schema field, so
+// the root_field label's cardinality is bounded by the schema, and fragment cycles are
+// already ruled out. The response key is kept so a field error (whose path starts with it)
+// can be attributed to the root field that actually failed.
+function rootFieldsByResponseKey(
+  document: DocumentNode,
+  operation: OperationDefinitionNode,
+): Map<string, string> {
+  const fragments = new Map<string, SelectionSetNode>();
+  for (const definition of document.definitions) {
+    if (definition.kind === Kind.FRAGMENT_DEFINITION) {
+      fragments.set(definition.name.value, definition.selectionSet);
+    }
+  }
+  const fields = new Map<string, string>();
+  const collect = (selectionSet: SelectionSetNode): void => {
+    for (const selection of selectionSet.selections) {
+      if (selection.kind === Kind.FIELD) {
+        fields.set(selection.alias?.value ?? selection.name.value, selection.name.value);
+      } else if (selection.kind === Kind.INLINE_FRAGMENT) {
+        collect(selection.selectionSet);
+      } else {
+        const fragment = fragments.get(selection.name.value);
+        if (fragment) collect(fragment);
+      }
+    }
+  };
+  collect(operation.selectionSet);
+  return fields;
+}
+
+// Requests that fail before an operation is resolved (parse / validation errors) have no
+// operation type or root field - they're bucketed under this placeholder and told apart by
+// error_code (GRAPHQL_PARSE_FAILED / GRAPHQL_VALIDATION_FAILED).
+const UNRESOLVED = "unresolved";
+
 export const metricsPlugin: ApolloServerPlugin = {
-  async requestDidStart({ request }) {
+  async requestDidStart() {
     const start = performance.now();
-    const operation = request.operationName ?? "anonymous";
+    let operationType = UNRESOLVED;
+    let fieldByResponseKey = new Map<string, string>();
+    let rootFields = [UNRESOLVED];
     return {
+      async didResolveOperation({ document, operation }) {
+        if (!operation) return;
+        operationType = operation.operation;
+        fieldByResponseKey = rootFieldsByResponseKey(document, operation);
+        if (fieldByResponseKey.size > 0) rootFields = [...new Set(fieldByResponseKey.values())];
+      },
       async willSendResponse({ response }) {
         const durationMs = performance.now() - start;
-        graphqlRequestDuration.record(durationMs, { operation });
-        graphqlRequestCounter.add(1, { operation });
-        const hasErrors =
-          response.body.kind === "single" && Boolean(response.body.singleResult.errors?.length);
-        if (hasErrors) {
-          graphqlErrorCounter.add(1, { operation });
+
+        // Attribute each error to the root field it came from (its path starts with that
+        // field's response key). An error with no such path - e.g. a validation or
+        // variable-coercion failure - can't be pinned to one field, so it counts against
+        // every root field of the operation. extensions.code is only ever set by this
+        // service's own errors.ts helpers or by Apollo itself, so it's a small closed set.
+        const errorCodesByField = new Map<string, Set<string>>();
+        if (response.body.kind === "single") {
+          for (const error of response.body.singleResult.errors ?? []) {
+            const code = String(error.extensions?.code ?? "UNKNOWN");
+            const responseKey = error.path?.[0];
+            const field =
+              typeof responseKey === "string" ? fieldByResponseKey.get(responseKey) : undefined;
+            for (const affected of field ? [field] : rootFields) {
+              const codes = errorCodesByField.get(affected) ?? new Set<string>();
+              errorCodesByField.set(affected, codes.add(code));
+            }
+          }
+        }
+
+        for (const rootField of rootFields) {
+          const attributes = { operation_type: operationType, root_field: rootField };
+          graphqlRequestDuration.record(durationMs, attributes);
+          graphqlRequestCounter.add(1, attributes);
+          for (const errorCode of errorCodesByField.get(rootField) ?? []) {
+            graphqlErrorCounter.add(1, { ...attributes, error_code: errorCode });
+          }
         }
       },
     };
