@@ -14,15 +14,15 @@ export const options = {
 const BASE_URL = __ENV.BASE_URL || 'http://localhost/graphql';
 const jsonHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
 
-const CREATE_AUTHOR_MUTATION = `mutation ($input: CreateAuthorInput!) { createAuthor(input: $input) { id } }`;
+const CREATE_AUTHOR_MUTATION = `mutation CreateAuthor($input: CreateAuthorInput!) { createAuthor(input: $input) { id } }`;
 const CREATE_MESSAGE_MUTATION = `
-  mutation ($input: CreateMessageInput!) { createMessage(input: $input) { id } }
+  mutation CreateMessage($input: CreateMessageInput!) { createMessage(input: $input) { id } }
 `;
-const GET_MESSAGE_QUERY = `query ($id: ID!) { message(id: $id) { id } }`;
+const GET_MESSAGE_QUERY = `query GetMessage($id: ID!) { message(id: $id) { id } }`;
 const UPDATE_MESSAGE_MUTATION = `
-  mutation ($id: ID!, $input: UpdateMessageInput!) { updateMessage(id: $id, input: $input) { id version } }
+  mutation UpdateMessage($id: ID!, $input: UpdateMessageInput!) { updateMessage(id: $id, input: $input) { id version } }
 `;
-const DELETE_MESSAGE_MUTATION = `mutation ($id: ID!) { deleteMessage(id: $id) }`;
+const DELETE_MESSAGE_MUTATION = `mutation DeleteMessage($id: ID!) { deleteMessage(id: $id) }`;
 
 export function setup() {
   const res = http.post(BASE_URL, JSON.stringify({

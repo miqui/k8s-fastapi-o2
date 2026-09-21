@@ -19,9 +19,9 @@ const BASE_URL = __ENV.BASE_URL || 'http://localhost/graphql';
 const jsonHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
 
 const CREATE_MESSAGE_MUTATION = `
-  mutation ($input: CreateMessageInput!) { createMessage(input: $input) { id } }
+  mutation CreateMessage($input: CreateMessageInput!) { createMessage(input: $input) { id } }
 `;
-const GET_MESSAGE_QUERY = `query ($id: ID!) { message(id: $id) { id } }`;
+const GET_MESSAGE_QUERY = `query GetMessage($id: ID!) { message(id: $id) { id } }`;
 
 export default function () {
   // Invalid create: blank title/content/authorId should return a BAD_USER_INPUT error with

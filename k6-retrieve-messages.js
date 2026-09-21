@@ -15,7 +15,7 @@ const BASE_URL = __ENV.BASE_URL || 'http://localhost/graphql';
 const jsonHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
 
 const MESSAGES_QUERY = `
-  query ($limit: Int, $offset: Int) {
+  query ListMessages($limit: Int, $offset: Int) {
     messages(limit: $limit, offset: $offset) {
       totalCount
       items { id title content version author { id name } }

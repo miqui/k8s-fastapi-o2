@@ -12,18 +12,64 @@ Both now have a multi-select **Service** dropdown (`message-service`, `issue-ser
 - GraphQL / Prisma / Node.js series filter on `service_name=~"$service"`.
 - cAdvisor / kube-state series filter on `container=~"$service"` or `pod=~"$service-.*"` — this
   works because each container is named after its service (`message-service`, `issue-service`).
-- Per-service legends (`{{service_name}} / {{operation}}`), and the Prisma-pool, CPU and
+- Per-service legends (`{{service_name}} / {{root_field}}`), and the Prisma-pool, CPU and
   event-loop panels are aggregated (`sum` / `max`) instead of emitting one unlabelled series per pod.
 - **Ready Pods** replaces **Service Up** on `graphql-api`: the old query was
   `up{job="otel-collector"}`, which only says the collector is scraped, not that the API is alive.
 - **Error Ratio** and the overall errors line use `... or vector(0)` so they read 0, not "No data".
 
-**Known gap:** `graphql_errors_total` doesn't exist in Prometheus until an operation first returns
-an error (the OTel counter emits nothing before its first `.add()`), so the two *Error Rate by
-Operation* panels stay empty on a healthy system. Fixing it means pre-seeding the counter in each
-`telemetry.ts` (needs an image rebuild), not a dashboard change.
+`graphql_errors_total` is only created on the first error (the OTel counter emits nothing before its
+first `.add()`), so the per-root-field error panels stay empty on a healthy system rather than
+reading 0; the ratio and total panels use `or vector(0)` and the by-code panels say "No errors".
 
 Not changed: `graphql-api` uses `[1m]` rate windows and `api-red` uses `[5m]`, as before.
+
+## Schema-based metrics: `GraphQL Operations` and `GraphQL Errors` dashboards
+
+Two new dashboards (`graphql-operations`, `graphql-errors`, same ConfigMap), plus the existing
+per-operation panels on `graphql-api` / `api-red` re-pointed from `operation` to `root_field`.
+
+Both services' `metricsPlugin` now labels the `graphql_*` metrics with `operation_type`
+(`query` / `mutation` / `unresolved`), `root_field` (the schema field, aliases resolved) and, on
+`graphql_errors_total`, `error_code` (`extensions.code`). The old `operation` label (the client's
+`operationName`) is gone: it was client-controlled and unbounded, and every unnamed operation - i.e.
+all k6 traffic - landed in `anonymous`. Full details and caveats (multi-root-field counting, error
+attribution via the error `path`, the `unresolved` bucket) are in the README's
+"GraphQL Operation & Error Dashboards" section.
+
+- **GraphQL Operations** (12 panels; Service / Operation type / Root field variables): request rate,
+  mutation share, p95/p99, error ratio, active root fields; rate, query-vs-mutation, p95 and average
+  latency by root field; a latency-distribution heatmap; a per-root-field summary table.
+- **GraphQL Errors** (11 panels; Service / Root field / Error code variables): error ratio, errors/s,
+  server errors/s (`INTERNAL_SERVER_ERROR|UNKNOWN`, should stay 0), conflicts/s; errors by code, by
+  root field, ratio and conflict ratio by root field; client-input errors; `NOT_FOUND` by root field;
+  a totals table.
+
+### Rollout order (follow the ArgoCD image flow)
+
+The label change is in the service code, so it only reaches the cluster through the normal flow:
+merge -> GitHub Actions builds and pushes the images -> Argo CD Image Updater picks up the new tags ->
+Argo CD rolls the Deployments. Nothing is loaded or patched by hand. The Grafana ConfigMap is *not*
+Argo-managed (Argo tracks `k8s/`, not `k8s/observability/`), so after the rollout apply it with
+`kubectl apply -f k8s/observability/grafana-dashboard-json-configmap.yaml`. Applying it before the
+new images are running just shows empty new panels, and `root_field` legends on the two older
+dashboards collapse until the new series exist.
+
+### Verification performed
+
+- Each service's real `metricsPlugin` and OTLP exporter were run against that service's real schema and
+  error helpers (stub resolvers, a local OTLP receiver), asserting the exact label sets for: plain
+  and named operations, multiple root fields, fragment/inline-fragment roots, aliases,
+  introspection, parse and validation failures, `NOT_FOUND` / `CONFLICT` / `BAD_USER_INPUT`, and that
+  errors in one root field aren't attributed to another. No `operation` attribute is emitted.
+- 18 of the new expressions - the exact strings shipped in the ConfigMap - were unit-tested with
+  `promtool test rules` against synthetic series with hand-computed expected values (rates,
+  ratios, `histogram_quantile` interpolation, the `or vector(0)` empty-error case, zero-error rows in
+  the summary table). All 62 GraphQL-dashboard expressions parse on the live Prometheus.
+- All 15 GraphQL documents in the k6 scripts (now named operations) validate against the real schema.
+- **Not verified visually:** Grafana itself was not driven, so panel rendering (the heatmap, the two
+  table transformations, the `$root_field` / `$error_code` query variables) is untested until the
+  rollout above. Live series with the new labels can't exist before then either.
 
 ## New dashboard: "OpenObserve Ops"
 
