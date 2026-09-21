@@ -49,11 +49,11 @@ attribution via the error `path`, the `unresolved` bucket) are in the README's
 
 The label change is in the service code, so it only reaches the cluster through the normal flow:
 merge -> GitHub Actions builds and pushes the images -> Argo CD Image Updater picks up the new tags ->
-Argo CD rolls the Deployments. Nothing is loaded or patched by hand. The Grafana ConfigMap is *not*
-Argo-managed (Argo tracks `k8s/`, not `k8s/observability/`), so after the rollout apply it with
-`kubectl apply -f k8s/observability/grafana-dashboard-json-configmap.yaml`. Applying it before the
-new images are running just shows empty new panels, and `root_field` legends on the two older
-dashboards collapse until the new series exist.
+Argo CD rolls the Deployments. Nothing is loaded or patched by hand. The Grafana ConfigMap ships through the
+`observability` Argo Application (`k8s/argocd/observability-application.yaml`) once that is registered;
+before it is, apply it with `kubectl apply -f k8s/observability/grafana-dashboard-json-configmap.yaml`.
+Either way, the new panels are empty (and `root_field` legends on the two older dashboards collapse) until
+the new images are running and have served traffic.
 
 ### Verification performed
 
@@ -114,7 +114,7 @@ without the job filter these would silently mix with the wrong process's numbers
 ### Dependencies (documented in full elsewhere)
 
 This dashboard depends on two other changes, covered in their own docs:
-- `k8s/observability/prometheus-configmap.yaml` gained an `openobserve` scrape job for
+- `k8s/observability/config/prometheus.yml` gained an `openobserve` scrape job for
   `openobserve.observability.svc.cluster.local:5080/metrics` — see `PROMETHEUS.md` step 5.
 - `k8s/observability/openobserve-values.yaml` gained `config.ZO_PROMETHEUS_ENABLED: "true"` (off by
   default — confirmed live that `/metrics` returns HTTP 200 with an empty body otherwise) — see

@@ -33,7 +33,7 @@ config:
 # Bumped from 250m/512Mi (req) & 1/1Gi (limit) when remote_write was widened beyond just
 # the message-service's own metrics to also carry cluster ops metrics (node-exporter,
 # kube-state-metrics, kubernetes-nodes-cadvisor - see write_relabel_configs in
-# k8s/observability/prometheus-configmap.yaml) - cadvisor in particular is much
+# k8s/observability/config/prometheus.yml) - cadvisor in particular is much
 # higher-cardinality (per-container, per-node) than the single-job feed this was sized for.
 resources:
   requests:

@@ -1,6 +1,6 @@
 # Prometheus Config Changes — OpenObserve Observability Rollout
 
-All changes below are to `k8s/observability/prometheus-configmap.yaml`, in the order they were
+All changes below are to `k8s/observability/config/prometheus.yml`, in the order they were
 actually made. Every `remote_write`/`scrape_configs` change (this ConfigMap has no
 `checksum/config`-style annotation, unlike the OpenObserve StatefulSet) required a manual
 `kubectl rollout restart deployment/prometheus -n observability` to take effect.
@@ -82,7 +82,7 @@ window; `prometheus_remote_storage_shards_desired` stayed at ~0.03 (nowhere near
 OpenObserve pod had 0 restarts. Confirmed real cAdvisor data landed (`container_memory_working_set_bytes`
 queryable in OpenObserve).
 
-This is the config's current state (`k8s/observability/prometheus-configmap.yaml` lines 33–41).
+This is the config's current state (`k8s/observability/config/prometheus.yml` lines 24–32).
 
 ## 5. Added a new scrape job for OpenObserve's own metrics (self-monitoring)
 
@@ -126,5 +126,5 @@ scrape_configs:
       - targets: ['openobserve.observability.svc.cluster.local:5080']
 
   # ... postgres-exporter, hazelcast, node-exporter, kubernetes-nodes-cadvisor jobs
-  # pre-existed this work and are unchanged - see prometheus-configmap.yaml for the full file.
+  # pre-existed this work and are unchanged - see config/prometheus.yml for the full file.
 ```
