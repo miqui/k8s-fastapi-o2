@@ -9,6 +9,11 @@ data:
   DB_PORT: "5432"
   DB_NAME: "messagedb"
   OTEL_METRICS_URL: "http://otel-collector.observability.svc.cluster.local:4318/v1/metrics"
+  OTEL_TRACES_URL: "http://otel-collector.observability.svc.cluster.local:4318/v1/traces"
+  # Sample 10% of new traces (children follow their parent's decision) - a k6 run
+  # otherwise floods OpenObserve's 5Gi PVC. Raise to 1.0 temporarily when debugging.
+  OTEL_TRACES_SAMPLER: "parentbased_traceidratio"
+  OTEL_TRACES_SAMPLER_ARG: "0.1"
   HAZELCAST_HOST: "hazelcast"
   HAZELCAST_PORT: "5701"
 ---
@@ -23,6 +28,11 @@ data:
   DB_PORT: "5432"
   DB_NAME: "issuedb"
   OTEL_METRICS_URL: "http://otel-collector.observability.svc.cluster.local:4318/v1/metrics"
+  OTEL_TRACES_URL: "http://otel-collector.observability.svc.cluster.local:4318/v1/traces"
+  # Sample 10% of new traces (children follow their parent's decision) - a k6 run
+  # otherwise floods OpenObserve's 5Gi PVC. Raise to 1.0 temporarily when debugging.
+  OTEL_TRACES_SAMPLER: "parentbased_traceidratio"
+  OTEL_TRACES_SAMPLER_ARG: "0.1"
 ---
 apiVersion: v1
 kind: ConfigMap

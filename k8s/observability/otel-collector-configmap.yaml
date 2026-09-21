@@ -18,6 +18,15 @@ data:
     processors:
       batch: {}
 
+    extensions:
+      # OpenObserve's OTLP endpoint needs the same root basic auth Prometheus' remote_write
+      # uses. The password comes from the same Secret (openobserve-remote-write-credentials,
+      # see otel-collector-deployment.yaml) so it never lands in this ConfigMap.
+      basicauth/openobserve:
+        client_auth:
+          username: root@example.com
+          password: ${env:OPENOBSERVE_PASSWORD}
+
     exporters:
       prometheus:
         endpoint: 0.0.0.0:8889
@@ -28,10 +37,20 @@ data:
           enabled: true
       debug:
         verbosity: basic
+      # Traces go straight to OpenObserve (org "default"); the exporter appends /v1/traces.
+      otlphttp/openobserve:
+        endpoint: http://openobserve.observability.svc.cluster.local:5080/api/default
+        auth:
+          authenticator: basicauth/openobserve
 
     service:
+      extensions: [basicauth/openobserve]
       pipelines:
         metrics:
           receivers: [otlp]
           processors: [batch]
           exporters: [prometheus, debug]
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [otlphttp/openobserve]

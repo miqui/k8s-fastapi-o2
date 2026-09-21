@@ -1,4 +1,5 @@
 import "./env";
+import "./tracing";
 import http from "node:http";
 import { ApolloServer } from "@apollo/server";
 import { ApolloServerPluginLandingPageLocalDefault } from "@apollo/server/plugin/landingPage/default";
@@ -10,6 +11,7 @@ import { resolvers } from "./resolvers";
 import { typeDefs } from "./schema";
 import { seedInitialIssue } from "./seed";
 import { metricsPlugin, registerPrismaMetrics, shutdownTelemetry } from "./telemetry";
+import { shutdownTracing } from "./tracing";
 
 const PORT = Number(process.env.PORT ?? 8080);
 
@@ -60,6 +62,7 @@ async function main(): Promise<void> {
     httpServer.close();
     await prisma.$disconnect();
     await shutdownTelemetry();
+    await shutdownTracing();
     process.exit(0);
   };
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
