@@ -13,7 +13,7 @@ are tailed off the nodes by an OTel Collector DaemonSet and shipped to OpenObser
 
 | File | What |
 | :--- | :--- |
-| `log-collector-configmap.yaml` | `filelog` receiver + `container` parser → batch → `otlphttp/openobserve` |
+| `config/log-collector.yaml` | `filelog` receiver + `container` parser → batch → `otlphttp/openobserve` |
 | `log-collector-daemonset.yaml` | `otel/opentelemetry-collector-contrib:0.114.0`, one pod per api/db/cache node |
 | `resourcequota.yaml` | `pods` raised from 20 to 30 (was 14/20 in use; the DaemonSet adds 5) |
 | `../policies/exceptions/log-collector.yaml` | Kyverno `PolicyException` (see "Kyverno" below) |

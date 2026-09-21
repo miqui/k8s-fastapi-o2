@@ -132,9 +132,20 @@ helm upgrade --install kyverno kyverno/kyverno \
 kubectl wait --for=condition=established --timeout=60s \
   crd/validatingpolicies.policies.kyverno.io crd/policyexceptions.policies.kyverno.io
 
-# 5. Apply the observability stack (OTel Collector, Prometheus, Grafana, OpenObserve)
-echo "=> Applying observability stack manifests..."
-kubectl apply -k k8s/observability/
+# 5. Register the ArgoCD Application that owns k8s/observability/ (OTel Collector, Prometheus,
+#    Grafana + its dashboards, kube-state-metrics, node-exporter, the log collector, their RBAC and
+#    the namespace itself) and wait for its first sync. Replaces the direct
+#    `kubectl apply -k k8s/observability/`, so a merged dashboard or scrape-config change reaches
+#    the cluster through Argo like everything else instead of a hand-run kubectl apply. Like the
+#    Applications below it tracks `main`, so k8s/observability/ must exist on main. Waits for
+#    Synced (resources applied), not Healthy: the pods can't start until the secrets in 5a exist.
+#    OpenObserve (5b) and Headlamp (5c) are Helm installs and stay outside it.
+echo "=> Registering the observability ArgoCD Application..."
+kubectl apply -f k8s/argocd/observability-application.yaml
+echo "=> Waiting for the observability Application's first sync..."
+kubectl wait --namespace argocd \
+  --for=jsonpath='{.status.sync.status}'=Synced application/observability \
+  --timeout=180s
 
 # 5a. Inject observability secrets from environment (via op run)
 echo "=> Configuring observability secrets..."
@@ -151,7 +162,7 @@ kubectl create secret generic openobserve-remote-write-credentials \
 
 # 5b. Install OpenObserve (openobserve-standalone chart - single node, not the HA chart).
 #     Prometheus (deployed above) remote_writes every scraped series, including the
-#     message-service metrics, into it - see k8s/observability/prometheus-configmap.yaml.
+#     message-service metrics, into it - see k8s/observability/config/prometheus.yml.
 echo "=> Installing OpenObserve (openobserve-standalone chart)..."
 if ! helm repo list | grep -q '^openobserve[[:space:]]'; then
   helm repo add openobserve https://charts.openobserve.ai

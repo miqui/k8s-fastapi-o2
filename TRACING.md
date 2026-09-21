@@ -68,7 +68,7 @@ at 0.1.
 
 ## Collector
 
-`k8s/observability/otel-collector-configmap.yaml` gained a `traces` pipeline next to the existing
+`k8s/observability/config/otel-collector.yaml` gained a `traces` pipeline next to the existing
 `metrics` one:
 
 ```yaml
@@ -97,7 +97,7 @@ service:
 - `OPENOBSERVE_PASSWORD` comes from `secretKeyRef` in `otel-collector-deployment.yaml`, pointing at
   the existing `openobserve-remote-write-credentials` Secret (key `password`) that Prometheus'
   `remote_write` already uses — so the password stays out of the ConfigMap, and there is one
-  place to rotate it. The username is hard-coded, same as in `prometheus-configmap.yaml`.
+  place to rotate it. The username is hard-coded, same as in `config/prometheus.yml`.
 - The Secret in the repo (`openobserve-prometheus-secret.yaml`) holds a placeholder password;
   `deploy-kind.sh` creates the real one. Don't `kubectl apply` the placeholder file over a live cluster.
 - Changing the collector ConfigMap needs a restart: `kubectl rollout restart deploy/otel-collector -n observability`
