@@ -81,6 +81,16 @@ kubectl apply --server-side --force-conflicts -n argocd -f https://raw.githubuse
 # service port instead - same trust level as Grafana/OpenObserve/Headlamp on this local cluster.
 kubectl patch deployment argocd-server -n argocd --type=json \
   -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--insecure"}]'
+# argocd-repo-server has no resource requests by default (BestEffort QoS), so under Docker
+# Desktop VM CPU/memory pressure its /healthz?full=true handler can occasionally miss the
+# liveness probe's 5s timeoutSeconds even though the process itself is fine - see the
+# "Diagnosing argocd-repo-server liveness probe failures" section of KUBECTL.md. Loosen the
+# probe and give it a CPU/memory request (Burstable QoS) so it isn't starved first.
+kubectl patch deployment argocd-repo-server -n argocd --type=json -p='[
+  {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/timeoutSeconds","value":10},
+  {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/failureThreshold","value":6},
+  {"op":"add","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"100m","memory":"256Mi"}}}
+]'
 echo "=> Waiting for ArgoCD to be ready..."
 kubectl wait --namespace argocd \
   --for=condition=available deployment/argocd-server deployment/argocd-repo-server \
