@@ -15,6 +15,15 @@
 nodeSelector:
   workload: observability
 
+config:
+  # The chart bundles the official Prometheus plugin (headlamp-k8s/plugins/prometheus, "Show
+  # Prometheus metrics" charts on workload detail pages) inside its image; this just keeps it
+  # served (chart default, spelled out here for visibility). The plugin auto-detects Prometheus
+  # in-cluster via the `headlamp-prometheus=true` label on k8s/observability/prometheus-service.yaml
+  # - no separate Prometheus install or per-plugin config needed.
+  staticPlugins:
+    enabled: true
+
 resources:
   requests:
     cpu: "50m"

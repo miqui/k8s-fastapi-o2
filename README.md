@@ -113,6 +113,13 @@ on macOS/most Linux out of the box — see [Deployment with Kind / Kubernetes](#
   --duration=24h` (that's cluster-admin in the browser - fine for this disposable local kind
   cluster only, not a pattern to reuse anywhere shared).
 
+  Headlamp's image bundles the official
+  [Prometheus plugin](https://github.com/headlamp-k8s/plugins/tree/main/prometheus)
+  (`config.staticPlugins.enabled: true` in `k8s/headlamp/headlamp-values.yaml`, the chart default),
+  which adds metrics charts to workload detail pages. It auto-detects Prometheus in-cluster via the
+  `headlamp-prometheus: "true"` label on `k8s/observability/prometheus-service.yaml` - no extra
+  per-cluster config needed.
+
   `write_relabel_configs` in `k8s/observability/config/prometheus.yml` deliberately keeps only
   four scrape jobs - `otel-collector` (the message-service's own metrics), plus `node-exporter`,
   `kube-state-metrics`, and `kubernetes-nodes-cadvisor` (the same three jobs behind the "kind cluster
