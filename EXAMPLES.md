@@ -1,9 +1,11 @@
 # Query Examples
 
-Twenty example calls against the two GraphQL APIs in this repo, ten each, ordered simple to
-complex. Every example gives the raw GraphQL document and an equivalent `curl` one-liner against
-the local ingress. See [README.md](README.md) for schema details, error codes, and how each API's
-pagination style works ([message-service](README.md#pagination),
+Example calls against the two GraphQL APIs in this repo, ordered simple to complex: ten for
+message-service, ten for issue-service's Jira-lite core, plus six more covering issue-service's
+ITSM/ITIL extension (Incident/Problem/Change/ServiceRequest). Every example gives the raw GraphQL
+document and an equivalent `curl` one-liner against the local ingress. See [README.md](README.md)
+for schema details, error codes, and how each API's pagination style works
+([message-service](README.md#pagination),
 [issue-service](README.md#issue-service-second-graphql-api)).
 
 Endpoints:
@@ -462,4 +464,214 @@ curl -s -X POST "$URL" -H "Content-Type: application/json" \
 # Attach a label (CONFLICT if it belongs to a different project).
 curl -s -X POST "$URL" -H "Content-Type: application/json" \
   -d '{"query":"mutation($issueId: ID!, $labelId: ID!) { attachLabel(issueId: $issueId, labelId: $labelId) { id labels { name } } }","variables":{"issueId":"'"$ISSUE_ID"'","labelId":"<LABEL_ID>"}}'
+```
+
+---
+
+## issue-service — ITSM extension (Incident / Problem / Change / ServiceRequest)
+
+`Issue.kind` discriminates a plain `TASK` from one of these; each extension type is reachable
+either through its own `Issue` (`issue { incident { ... } }`) or through the dedicated root fields
+below. There's no mutation for `SlaPolicy` — it's a seed-only config table (see
+[GRAFANA.md](GRAFANA.md#planned-impact-of-the-issue-service-itsm-extension-not-yet-implemented) for
+what's still open around it) — but a policy match at creation time is what populates
+`slaBreachAt` on an `Incident`/`ServiceRequest` below.
+
+### 11. Create an incident
+
+```graphql
+mutation {
+  createIncident(projectId: "<PROJECT_ID>", title: "Checkout API 500s", severity: SEV1) {
+    id
+    status
+    severity
+    slaBreachAt
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost/issues/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation($projectId: ID!, $title: String!, $severity: IncidentSeverity!) { createIncident(projectId: $projectId, title: $title, severity: $severity) { id status severity slaBreachAt } }","variables":{"projectId":"<PROJECT_ID>","title":"Checkout API 500s","severity":"SEV1"}}'
+```
+
+### 12. Create a problem, then link the incident to it
+
+```graphql
+mutation {
+  createProblem(projectId: "<PROJECT_ID>", title: "Checkout DB connection pool exhaustion") {
+    id
+    status
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost/issues/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation($projectId: ID!, $title: String!) { createProblem(projectId: $projectId, title: $title) { id status } }","variables":{"projectId":"<PROJECT_ID>","title":"Checkout DB connection pool exhaustion"}}'
+```
+
+```graphql
+mutation {
+  linkIncidentToProblem(incidentId: "<INCIDENT_ID>", problemId: "<PROBLEM_ID>") {
+    id
+    problem { id status }
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost/issues/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation($incidentId: ID!, $problemId: ID!) { linkIncidentToProblem(incidentId: $incidentId, problemId: $problemId) { id problem { id status } } }","variables":{"incidentId":"<INCIDENT_ID>","problemId":"<PROBLEM_ID>"}}'
+```
+
+### 13. Mark the problem a known error, then raise a change to fix it
+
+`moveProblem`'s `rootCause` argument is optional — pass it once the cause is understood, which is
+exactly when `status` moves to `KNOWN_ERROR`.
+
+```graphql
+mutation {
+  moveProblem(
+    id: "<PROBLEM_ID>"
+    status: KNOWN_ERROR
+    rootCause: "Pool max size too low for Black Friday traffic."
+  ) {
+    id
+    status
+    rootCause
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost/issues/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation($id: ID!, $status: ProblemStatus!, $rootCause: String) { moveProblem(id: $id, status: $status, rootCause: $rootCause) { id status rootCause } }","variables":{"id":"<PROBLEM_ID>","status":"KNOWN_ERROR","rootCause":"Pool max size too low for Black Friday traffic."}}'
+```
+
+```graphql
+mutation {
+  createChange(
+    projectId: "<PROJECT_ID>"
+    title: "Raise checkout DB pool size"
+    type: EMERGENCY
+    plannedAt: "2026-09-23T02:00:00Z"
+  ) {
+    id
+    status
+    type
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost/issues/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation($projectId: ID!, $title: String!, $type: ChangeType!, $plannedAt: String) { createChange(projectId: $projectId, title: $title, type: $type, plannedAt: $plannedAt) { id status type } }","variables":{"projectId":"<PROJECT_ID>","title":"Raise checkout DB pool size","type":"EMERGENCY","plannedAt":"2026-09-23T02:00:00Z"}}'
+```
+
+### 14. Create a service request
+
+```graphql
+mutation {
+  createServiceRequest(
+    projectId: "<PROJECT_ID>"
+    title: "New laptop for onboarding"
+    requesterEmail: "new.hire@example.com"
+    category: "hardware"
+  ) {
+    id
+    status
+    slaBreachAt
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost/issues/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation($projectId: ID!, $title: String!, $requesterEmail: String!, $category: String!) { createServiceRequest(projectId: $projectId, title: $title, requesterEmail: $requesterEmail, category: $category) { id status slaBreachAt } }","variables":{"projectId":"<PROJECT_ID>","title":"New laptop for onboarding","requesterEmail":"new.hire@example.com","category":"hardware"}}'
+```
+
+### 15. Board view: a project's incidents, paginated by kind
+
+Reuses `Project.issues`' existing cursor pagination — `kind` is just another filter alongside
+`status`, so the page-walk pattern from example 8 applies unchanged.
+
+```graphql
+query {
+  workspace(id: "<WORKSPACE_ID>") {
+    projects {
+      issues(kind: INCIDENT, first: 10, after: "<END_CURSOR>") {
+        edges {
+          cursor
+          node {
+            id
+            title
+            incident { severity status }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost/issues/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query($id: ID!, $kind: IssueKind, $first: Int, $after: String) { workspace(id: $id) { projects { issues(kind: $kind, first: $first, after: $after) { edges { cursor node { id title incident { severity status } } } pageInfo { hasNextPage endCursor } } } } }","variables":{"id":"<WORKSPACE_ID>","kind":"INCIDENT","first":10,"after":"<END_CURSOR>"}}'
+```
+
+### 16. Dashboard: cross-project SEV1 triage and SLA-breach queue, paginated
+
+Unlike example 15, these two root fields aren't scoped to one project — `incidents`/
+`serviceRequests` are the org-wide views, and both connections carry a `totalCount` for a
+dashboard badge alongside the usual cursor `pageInfo`.
+
+```graphql
+query {
+  incidents(severity: SEV1, slaBreached: true, first: 20) {
+    totalCount
+    edges {
+      cursor
+      node {
+        id
+        status
+        slaBreachAt
+        issue { title project { key } }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+```bash
+curl -s -X POST http://localhost/issues/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query($severity: IncidentSeverity, $slaBreached: Boolean, $first: Int) { incidents(severity: $severity, slaBreached: $slaBreached, first: $first) { totalCount edges { cursor node { id status slaBreachAt issue { title project { key } } } } pageInfo { hasNextPage endCursor } } }","variables":{"severity":"SEV1","slaBreached":true,"first":20}}'
+```
+
+Walking every page of the SLA-breach queue for service requests instead:
+
+```bash
+#!/usr/bin/env bash
+set -eo pipefail
+URL="http://localhost/issues/graphql"
+CURSOR="null"
+
+while :; do
+  RESP=$(curl -s -X POST "$URL" -H "Content-Type: application/json" \
+    -d "{\"query\":\"query(\$after: String) { serviceRequests(slaBreached: true, first: 20, after: \$after) { totalCount edges { cursor node { id category dueAt requesterEmail } } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"after\":$CURSOR}}")
+  echo "$RESP" | jq '.data.serviceRequests.edges[].node'
+  HAS_NEXT=$(echo "$RESP" | jq '.data.serviceRequests.pageInfo.hasNextPage')
+  CURSOR=$(echo "$RESP" | jq '.data.serviceRequests.pageInfo.endCursor')
+  [ "$HAS_NEXT" != "true" ] && break
+done
 ```

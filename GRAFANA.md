@@ -145,3 +145,34 @@ kubectl exec -n observability deploy/grafana -- grafana-cli admin reset-admin-pa
 
 No config files were changed for this — `grafana-secret.yaml` already had the correct value; only
 Grafana's own internal (sqlite) state was out of sync with it.
+
+## Planned: impact of the issue-service ITSM extension (not yet implemented)
+
+`issue-service`'s schema is gaining ITSM/ITIL concepts (Incident/Problem/Change/ServiceRequest -
+see `issue-service/prisma/schema.prisma`), which adds several new mutations (`createIncident`,
+`moveIncident`, `linkIncidentToProblem`, `createProblem`, `moveProblem`, `createChange`,
+`moveChange`, `linkChangeToProblem`, `createServiceRequest`, `moveServiceRequest`) and new root
+queries (`incident`, `problem`, `change`, `serviceRequest`, `incidents`, `serviceRequests`, plus a
+`kind` argument on `Project.issues`). This section tracks what that does and doesn't require from
+the dashboards, for whoever picks this up.
+
+- **No dashboard JSON changes needed for the new fields to show up.** `root_field` and `error_code`
+  are live Prometheus template variables (see "Schema-based metrics" above), not hardcoded lists -
+  the new mutations/queries will appear in the `GraphQL Operations` / `GraphQL Errors` dashboards'
+  variable dropdowns and per-root-field panels automatically once traffic exists, the same way
+  `moveIssue`/`attachLabel` did when issue-service was first added.
+- **The `Conflicts/s` panel's *description* text goes stale**, not its function: it currently reads
+  "CONFLICT: optimistic-lock version mismatches (`updateMessage`) and `deleteAuthor`/`attachLabel`
+  constraint conflicts" (`k8s/observability/grafana-dashboard-json-configmap.yaml`, panel id 4 on
+  `graphql-errors`). `linkIncidentToProblem` and `linkChangeToProblem` are two more CONFLICT sources
+  (cross-project link attempts) that won't be mentioned there. The underlying PromQL already filters
+  dynamically by `error_code="CONFLICT"`, so the panel's numbers are correct either way - this is a
+  one-line doc-text edit in the ConfigMap, not urgent.
+- **No `$service` dropdown changes** - ITSM traffic is still `service.name = "issue-service"`, same
+  container/label as today.
+- **Open question for whoever builds the dashboard-sized `incidents`/`serviceRequests` triage
+  queries later** (see the design discussion that preceded this schema change): if that ever grows
+  into its own Grafana panel (e.g. "open SEV1 count", "SLA breaches"), it would need to query
+  `issuedb` directly (via the Postgres exporter, same pattern as `pg_stat_statements` in
+  [PROMETHEUS.md](PROMETHEUS.md)) or a new business-metric OTel counter - `graphql_requests_total`
+  only measures API traffic, not domain state like "how many incidents are currently open."
