@@ -163,12 +163,19 @@ and swap in use on the `free -m` line means pages are being swapped out. Both we
 (CPU `some` ~17%, ~465 MB swapped). The fix is more VM memory (Docker Desktop → Settings →
 Resources) and/or fewer kind workers.
 
-Loosening the liveness probe (about 60s of tolerated stall instead of about 15s) is an option if the
-restarts are a nuisance. Not applied here:
+Restarts were frequent enough to be a nuisance, so `deploy-kind.sh` now applies this patch right
+after installing ArgoCD (alongside the `argocd-server --insecure` patch): it loosens the liveness
+probe (about 60s of tolerated stall instead of about 15s) and gives the container a CPU/memory
+request, moving it from BestEffort to Burstable QoS so it's less likely to be starved in the first
+place:
 
 ```bash
 kubectl patch deployment argocd-repo-server -n argocd --type=json -p='[
   {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/timeoutSeconds","value":10},
-  {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/failureThreshold","value":6}
+  {"op":"replace","path":"/spec/template/spec/containers/0/livenessProbe/failureThreshold","value":6},
+  {"op":"add","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"100m","memory":"256Mi"}}}
 ]'
 ```
+
+This treats the symptom, not the cause - the underlying fix is still more Docker Desktop VM memory
+(Settings → Resources) and/or fewer kind workers if PSI shows real contention.
