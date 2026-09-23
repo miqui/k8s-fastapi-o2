@@ -2,10 +2,13 @@ import "./env";
 import "./tracing";
 import http from "node:http";
 import { ApolloServer } from "@apollo/server";
+import { ApolloServerPluginLandingPageDisabled } from "@apollo/server/plugin/disabled";
 import { ApolloServerPluginLandingPageLocalDefault } from "@apollo/server/plugin/landingPage/default";
 import { expressMiddleware } from "@as-integrations/express5";
 import cors from "cors";
 import express from "express";
+import { queryLimitsPlugin } from "./guards";
+import { corsOptions, httpConfigSummary, introspectionEnabled } from "./http-config";
 import { prisma } from "./prisma";
 import { resolvers } from "./resolvers";
 import { typeDefs } from "./schema";
@@ -17,7 +20,7 @@ const PORT = Number(process.env.PORT ?? 8080);
 
 async function main(): Promise<void> {
   const app = express();
-  app.use(cors());
+  app.use(cors(corsOptions));
 
   let ready = false;
 
@@ -33,21 +36,32 @@ async function main(): Promise<void> {
     res.status(ready ? 200 : 503).json({ status: ready ? "UP" : "DOWN" });
   });
 
-  // Sandbox and introspection stay on for this disposable local dev cluster, same
-  // rationale as message-service's src/index.ts.
+  // Introspection and the Sandbox landing page are one switch (GRAPHQL_INTROSPECTION, see
+  // src/http-config.ts): Sandbox can't populate its schema view without introspection, so
+  // there's no point serving one without the other. Stacktraces stay off regardless.
+  // queryLimitsPlugin rejects over-deep / over-costly operations (GRAPHQL-API-DESIGN.md);
+  // metricsPlugin goes first so it registers before the limits plugin can reject a request,
+  // and maxRecursiveSelections caps fragment-expansion bombs before custom checks run.
   const apollo = new ApolloServer({
     typeDefs,
     resolvers,
-    plugins: [metricsPlugin, ApolloServerPluginLandingPageLocalDefault({ embed: true })],
+    plugins: [
+      metricsPlugin,
+      queryLimitsPlugin,
+      introspectionEnabled
+        ? ApolloServerPluginLandingPageLocalDefault({ embed: true })
+        : ApolloServerPluginLandingPageDisabled(),
+    ],
     includeStacktraceInErrorResponses: false,
-    introspection: true,
+    introspection: introspectionEnabled,
+    maxRecursiveSelections: true,
   });
   await apollo.start();
   app.use("/graphql", express.json(), expressMiddleware(apollo));
 
   const httpServer = http.createServer(app);
   await new Promise<void>((resolve) => httpServer.listen(PORT, resolve));
-  console.log(`issue-service listening on :${PORT}`);
+  console.log(`issue-service listening on :${PORT} (${httpConfigSummary})`);
 
   await prisma.$connect();
   registerPrismaMetrics(prisma);

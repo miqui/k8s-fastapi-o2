@@ -980,10 +980,24 @@ a request-level validation error (HTTP 400) automatically, before any resolver r
 ## GraphQL API
 
 The schema (`src/schema.ts`) is served at `POST /graphql`; Apollo Server's own landing page at that
-same URL in a browser gives you Apollo Sandbox, an in-browser query explorer against the live schema
-(introspection is left on - this is a disposable local dev API, not a public one). There's no
+same URL in a browser gives you Apollo Sandbox, an in-browser query explorer against the live schema.
+Introspection and Sandbox are one switch, `GRAPHQL_INTROSPECTION`: on by default for local
+`npm run dev`, off by default when `NODE_ENV=production` (which the Dockerfile sets), and turned on
+explicitly for this disposable dev cluster in `k8s/configmap.yaml`. Leave it off anywhere real.
+Sandbox runs its requests from the landing page itself, so it works without any CORS setup. Browsers on
+*other* origins are blocked by default; list the ones that may call the API in
+`CORS_ALLOWED_ORIGINS` (comma-separated exact origins, or `*` to allow everything). curl, k6 and other
+non-browser clients aren't affected by CORS. There's no
 separate spec file to keep in sync by hand, unlike the old REST API's generated OpenAPI document -
 the schema *is* the contract, and it's enforced by the GraphQL executor itself.
+
+**Query depth and cost limits.** The schema has cycles (`Issue.project` → `Project.issues` → …), so a
+small query can fan out into a huge number of resolver calls. Each service rejects any operation nested
+deeper than 10 fields (`QUERY_TOO_DEEP`) or priced above 5000 (`QUERY_TOO_COMPLEX`) with **HTTP 400**,
+before a single resolver runs. Cost multiplies through `first`/`limit` and nested lists; see
+[GRAPHQL-API-DESIGN.md](GRAPHQL-API-DESIGN.md) for the model and how the limits were chosen. Every query
+in [EXAMPLES.md](EXAMPLES.md) is comfortably within them. Both codes show up in the
+`graphql_errors_total{error_code=...}` metric.
 
 **Two different kinds of errors, two different HTTP statuses.** This is a deliberate, spec-mandated
 behavior change from the old REST API's uniform RFC 9457 problem-details responses:
