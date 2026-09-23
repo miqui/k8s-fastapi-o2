@@ -322,9 +322,7 @@ unbounded today. The prototype was calibrated against the `issue-service` schema
 
 Every ```` ```graphql ```` block in [EXAMPLES.md](EXAMPLES.md) (25 of them) was run through a real
 `ApolloServer` with `maxRecursiveSelections: true` and the plugin above. **None is rejected by the
-limits.** One of the 25 (issue-service #7) is invalid for an unrelated reason: it queries
-`project(id: ...)`, which is not a root field in the schema. The heaviest legitimate ones
-(numbers are `EXAMPLES.md`'s own section numbers):
+limits.** The heaviest ones (numbers are `EXAMPLES.md`'s own section numbers):
 
 | Query | Depth | Complexity |
 | --- | --- | --- |
