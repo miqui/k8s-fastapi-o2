@@ -354,13 +354,16 @@ curl -s -X POST http://localhost/issues/graphql \
 
 ```graphql
 query {
-  project(id: "<PROJECT_ID>") {
-    issues(first: 5) {
-      edges {
-        cursor
-        node { id title status }
+  workspace(id: "<WORKSPACE_ID>") {
+    projects {
+      id
+      issues(first: 5) {
+        edges {
+          cursor
+          node { id title status }
+        }
+        pageInfo { hasNextPage endCursor }
       }
-      pageInfo { hasNextPage endCursor }
     }
   }
 }
