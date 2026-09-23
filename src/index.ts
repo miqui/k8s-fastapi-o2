@@ -2,11 +2,14 @@ import "./env";
 import "./tracing";
 import http from "node:http";
 import { ApolloServer } from "@apollo/server";
+import { ApolloServerPluginLandingPageDisabled } from "@apollo/server/plugin/disabled";
 import { ApolloServerPluginLandingPageLocalDefault } from "@apollo/server/plugin/landingPage/default";
 import { expressMiddleware } from "@as-integrations/express5";
 import cors from "cors";
 import express from "express";
 import { connectCache, isCacheConnected, shutdownCache } from "./cache";
+import { queryLimitsPlugin } from "./guards";
+import { corsOptions, httpConfigSummary, introspectionEnabled } from "./http-config";
 import { prisma } from "./prisma";
 import { resolvers } from "./resolvers";
 import { typeDefs } from "./schema";
@@ -20,7 +23,7 @@ const HAZELCAST_PORT = process.env.HAZELCAST_PORT ?? "5701";
 
 async function main(): Promise<void> {
   const app = express();
-  app.use(cors());
+  app.use(cors(corsOptions));
 
   let ready = false;
 
@@ -38,22 +41,34 @@ async function main(): Promise<void> {
   // NODE_ENV=production (set in the Dockerfile) makes Apollo Server default to a bare
   // "server is running" landing page instead of the interactive Sandbox, disables schema
   // introspection (which Sandbox needs to populate its schema view), and controls whether
-  // error responses include a stacktrace - explicitly setting all three here decouples
-  // them from NODE_ENV: Sandbox and introspection stay on for this disposable local dev
-  // cluster (see the "GraphQL API" section in README.md) while stacktraces stay off.
+  // error responses include a stacktrace - all three are set explicitly here so they don't
+  // silently follow NODE_ENV. Introspection and the Sandbox landing page are one switch
+  // (GRAPHQL_INTROSPECTION, see src/http-config.ts; the k8s ConfigMap turns it on for this
+  // disposable local dev cluster - see the "GraphQL API" section in README.md); stacktraces
+  // stay off regardless. queryLimitsPlugin rejects over-deep / over-costly operations
+  // (GRAPHQL-API-DESIGN.md); metricsPlugin goes first so it registers before the limits plugin
+  // can reject a request, and maxRecursiveSelections caps fragment-expansion bombs before
+  // custom checks run.
   const apollo = new ApolloServer({
     typeDefs,
     resolvers,
-    plugins: [metricsPlugin, ApolloServerPluginLandingPageLocalDefault({ embed: true })],
+    plugins: [
+      metricsPlugin,
+      queryLimitsPlugin,
+      introspectionEnabled
+        ? ApolloServerPluginLandingPageLocalDefault({ embed: true })
+        : ApolloServerPluginLandingPageDisabled(),
+    ],
     includeStacktraceInErrorResponses: false,
-    introspection: true,
+    introspection: introspectionEnabled,
+    maxRecursiveSelections: true,
   });
   await apollo.start();
   app.use("/graphql", express.json(), expressMiddleware(apollo));
 
   const httpServer = http.createServer(app);
   await new Promise<void>((resolve) => httpServer.listen(PORT, resolve));
-  console.log(`message-service listening on :${PORT}`);
+  console.log(`message-service listening on :${PORT} (${httpConfigSummary})`);
 
   // Not optional, same as the old app (see HazelcastConfig.java's Javadoc): a
   // missing/unreachable Hazelcast member fails startup rather than silently running

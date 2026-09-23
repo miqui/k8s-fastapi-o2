@@ -6,12 +6,12 @@ limits how deep or how expensive a query can be, and the schema is full of cycle
 or any other guard — see `new ApolloServer({...})` in `src/index.ts` and
 `issue-service/src/index.ts`.
 
-> **Status: proposal.** Nothing in this document is wired into either service yet. The limits and
-> the guard code below were prototyped against the real `issue-service` schema and exercised through
-> a real `ApolloServer` (`executeOperation`) with stub resolvers, and every query in
-> [EXAMPLES.md](EXAMPLES.md) was run through it. The numbers in [Calibration](#calibration) are
-> from that run. The next step is to add `src/guards.ts` to each service (see
-> [Rollout](#rollout)).
+> **Status: implemented** in both services as `src/guards.ts` (`issue-service/src/guards.ts` for
+> the other), wired in `index.ts`. The limits and guard code were first prototyped against the real
+> `issue-service` schema and exercised through a real `ApolloServer` (`executeOperation`) with stub
+> resolvers, and every query in [EXAMPLES.md](EXAMPLES.md) was run through it. The numbers in
+> [Calibration](#calibration) are from that run. The structural work in
+> [layer 4](#4-structural-fixes-that-make-layers-23-tighter-separate-work) is not done yet.
 
 ## The problem
 
@@ -276,7 +276,8 @@ export const queryLimitsPlugin: ApolloServerPlugin = {
 };
 ```
 
-Wiring, in each service's `src/index.ts`:
+Wiring, in each service's `src/index.ts` (`introspectionEnabled` comes from `src/http-config.ts`,
+which reads `GRAPHQL_INTROSPECTION`):
 
 ```ts
 import { queryLimitsPlugin } from "./guards";
@@ -287,11 +288,13 @@ const apollo = new ApolloServer({
   plugins: [
     metricsPlugin,
     queryLimitsPlugin,
-    ApolloServerPluginLandingPageLocalDefault({ embed: true }),
+    introspectionEnabled
+      ? ApolloServerPluginLandingPageLocalDefault({ embed: true })
+      : ApolloServerPluginLandingPageDisabled(),
   ],
-  maxRecursiveSelections: true,
   includeStacktraceInErrorResponses: false,
-  introspection: true,
+  introspection: introspectionEnabled,
+  maxRecursiveSelections: true,
 });
 ```
 
@@ -308,15 +311,14 @@ What a rejected client sees:
 
 with HTTP status 400.
 
-### `message-service` needs one extra change
+### `message-service` prices `limit`, not `first`
 
 The estimator above prices connections from a `first` argument, which is what `issue-service` uses.
-`message-service`'s `messages(limit:, offset:)` uses `limit`, so as written the estimator would not
-see it and would price `MessagePage.items` as an unbounded list. Either teach the estimator about
-`limit` (`args.first ?? args.limit`, clamped to 1–200 there) or move `message-service` to Relay
-connections as recommended separately. Its `authors` and `Author.messages` lists are also
-unbounded today. The prototype was calibrated against the `issue-service` schema; the
-`message-service` examples all passed under it, but only because they are small.
+`message-service`'s `messages(limit:, offset:)` uses `limit`, so its `src/guards.ts` differs in
+exactly one place: it clamps `limit` (default 50, max 200, same as `clampPagination` in
+`src/resolvers.ts`) and treats `items` on a `*Page` as bounded by the parent. If `message-service`
+later moves to Relay connections, the two copies can converge. Its `authors` and `Author.messages`
+lists are unbounded today and priced with the "×10" placeholder, like the issue-service ones.
 
 ## Calibration
 
@@ -369,7 +371,8 @@ issue — prices at 7,012 and would be rejected. That is the trade-off the `firs
 
 Adjacent hardening that is out of scope here but complements it: per-client rate limiting at the
 ingress (`k8s/ingress.yaml`, `k8s/issue-service-ingress.yaml`; neither sets any `limit-*`
-annotation today), and restricting `cors()` to known origins.
+annotation today), and authentication, which neither service has. (Introspection is now opt-in
+outside local dev and CORS is an explicit allowlist; see `src/http-config.ts`.)
 
 ## Alternatives considered
 

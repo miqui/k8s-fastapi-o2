@@ -32,6 +32,7 @@
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "graphql": "^16.11.0",
+    "graphql-query-complexity": "^2.0.0",
     "graphql-tag": "^2.12.7",
     "hazelcast-client": "^5.7.0",
     "prisma": "6.19.3"

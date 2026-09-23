@@ -16,6 +16,9 @@ data:
   OTEL_TRACES_SAMPLER_ARG: "0.1"
   HAZELCAST_HOST: "hazelcast"
   HAZELCAST_PORT: "5701"
+  # Introspection + the Apollo Sandbox landing page are off in production unless enabled here
+  # (see src/http-config.ts). Fine for this disposable dev cluster; leave it off anywhere real.
+  GRAPHQL_INTROSPECTION: "true"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -33,6 +36,8 @@ data:
   # otherwise floods OpenObserve's 5Gi PVC. Raise to 1.0 temporarily when debugging.
   OTEL_TRACES_SAMPLER: "parentbased_traceidratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
+  # Same switch as message-service-config above.
+  GRAPHQL_INTROSPECTION: "true"
 ---
 apiVersion: v1
 kind: ConfigMap
