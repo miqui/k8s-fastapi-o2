@@ -143,7 +143,7 @@ plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take 
 - **CI** (`.github/workflows/message-service-ci.yml`): on push to `main` (and on pull requests, up
   to the test gate), path-filtered to `app/**`, `migrations/**`, `pyproject.toml`, `uv.lock` and the
   `Dockerfile`, the workflow runs `ruff check`, `pyright` and `pytest` (against a Postgres service
-  container) as a gate, then builds and pushes `docker.io/miqui/message-service`, tagged
+  container) as a gate, then builds and pushes `docker.io/miqui/rest-message-api`, tagged
   `<UTC yyyymmddHHMMSS>-<7-char sha>` (e.g. `20260918140501-a1b2c3d`, sortable by build time yet
   traceable to a commit) plus a floating `:latest`. Images are built for both `linux/amd64` and
   `linux/arm64` (via QEMU): kind's nodes run the host's architecture (arm64 on Apple Silicon), and an
@@ -170,7 +170,7 @@ plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take 
   [`ARGOCD.md`](ARGOCD.md) for the details and the one-time bootstrap on an existing cluster.
 - **Argo CD Image Updater** (v1.x, pinned to `v1.3.0` in `deploy-kind.sh`) is configured by an
   `ImageUpdater` custom resource (`k8s/argocd/image-updater.yaml`) - v1.x replaced v0.x's
-  Application annotations with this CRD. It watches `docker.io/miqui/message-service`, considers only tags matching `^[0-9]{14}-[0-9a-f]{7}$` (so never the
+  Application annotations with this CRD. It watches `docker.io/miqui/rest-message-api`, considers only tags matching `^[0-9]{14}-[0-9a-f]{7}$` (so never the
   floating `:latest`), and picks the highest one with the `alphabetical` strategy - i.e. the newest
   build, given the timestamp-prefixed tags. `newest-build` would be the obvious strategy but its
   docs advise against it on Docker Hub: it fetches a manifest per tag to read creation dates, and
@@ -178,7 +178,7 @@ plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take 
   (`DOCKERHUB_TOKEN_RO`, also from 1Password) so a compromised in-cluster credential can't push or
   delete images. On finding a new tag it patches the `Application`'s Kustomize image override
   directly (the default `argocd` write-back method, equivalent to `kustomize edit set image
-  message-service=docker.io/miqui/message-service:<tag>` - `manifestTargets.kustomize.name` maps
+  message-service=docker.io/miqui/rest-message-api:<tag>` - `manifestTargets.kustomize.name` maps
   the Deployment specs' short image name onto it) - no git commits, so CI and Image Updater never
   need push access to the GitHub repo at all.
 - **The credential Secrets are the deliberate exception.** (`postgres-credentials`; the observability
