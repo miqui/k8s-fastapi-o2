@@ -8,9 +8,9 @@ from sqlalchemy import text
 
 from app.cache import cache
 from app.db import engine
-from app.errors import register_error_handlers
+from app.errors import install_openapi, problem_responses, register_error_handlers
 from app.middleware import BodyLimitMiddleware
-from app.routers import authors, health, messages
+from app.routers import authors, health, messages, problems
 from app.seed import seed_initial_message
 from app.settings import get_settings
 from app.state import state
@@ -64,11 +64,14 @@ def create_app(*, telemetry: bool = True) -> FastAPI:
         docs_url="/docs" if docs else None,
         redoc_url="/redoc" if docs else None,
         openapi_url="/openapi.json" if docs else None,
+        responses=problem_responses(500),
     )
     register_error_handlers(app)
+    install_openapi(app)
     app.include_router(health.router)
     app.include_router(messages.router)
     app.include_router(authors.router)
+    app.include_router(problems.router)
 
     # add_middleware() wraps: the last one added is outermost. Order (outer -> inner): OTel span,
     # request metrics, CORS, body limit, app.

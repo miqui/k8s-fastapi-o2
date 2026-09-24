@@ -72,10 +72,11 @@ stable machine-readable `code` that clients should switch on (the human `detail`
 
 ```json
 {
-  "type": "about:blank",
+  "type": "/problems/bad-user-input",
   "title": "Bad Request",
   "status": 400,
   "detail": "The request content was invalid or failed validation constraints.",
+  "instance": "/messages",
   "code": "BAD_USER_INPUT",
   "invalidParams": [
     { "name": "title", "reason": "title is required and cannot be blank" },
@@ -93,6 +94,22 @@ stable machine-readable `code` that clients should switch on (the human `detail`
 
 Other framework-raised statuses (for example `405`) come back in the same shape with a
 `HTTP_<status>` code. Every error increments `http_errors_total{error_code=...}`.
+
+The RFC members:
+
+- **`type`** names the problem class as a relative URI, and each one resolves: `GET /problems`
+  lists them and `GET /problems/{slug}` describes one (`bad-user-input`, `not-found`, `conflict`,
+  `payload-too-large`, `internal-server-error`). An oversized body has its own `payload-too-large`
+  type, although it shares the `BAD_USER_INPUT` code with the 400 case. A status with no meaning
+  beyond itself (`405`) uses `about:blank`, which is what the RFC prescribes. `code` stays the
+  thing to switch on; `type` is the standards-shaped equivalent.
+- **`title`** is the HTTP status phrase, the same for every occurrence of a `type`.
+- **`instance`** is the request path (percent-encoded). It identifies the resource that failed, not
+  the individual occurrence; to correlate with logs, use the trace id in the server log line.
+
+The OpenAPI document (when `API_DOCS_ENABLED`) lists each route's error statuses as
+`application/problem+json` with a shared `Problem` schema. FastAPI's default `422
+HTTPValidationError` entries are removed, since validation answers `400`.
 
 ## Optimistic locking
 

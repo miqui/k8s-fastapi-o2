@@ -963,10 +963,11 @@ The full surface - endpoints, status codes, validation rules, the error model - 
 
 ```json
 {
-  "type": "about:blank",
+  "type": "/problems/bad-user-input",
   "title": "Bad Request",
   "status": 400,
   "detail": "The request content was invalid or failed validation constraints.",
+  "instance": "/messages",
   "code": "BAD_USER_INPUT",
   "invalidParams": [{ "name": "title", "reason": "title is required and cannot be blank" }]
 }

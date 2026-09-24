@@ -26,7 +26,9 @@ class BodyLimitMiddleware:
         declared = dict(scope["headers"]).get(b"content-length", b"")
         if declared.isdigit() and int(declared) > self.max_bytes:
             error = self._too_large()
-            response = problem_response(scope, error.status, error.code, error.detail)
+            response = problem_response(
+                scope, error.status, error.code, error.detail, type_slug=error.type_slug
+            )
             await response(scope, receive, send)
             return
 

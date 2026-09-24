@@ -40,9 +40,10 @@ async def test_validation_collects_all_errors_as_problem_json(client: httpx.Asyn
     body = response.json()
     assert response.status_code == 400  # FastAPI's default 422 is overridden
     assert response.headers["content-type"] == "application/problem+json"
-    assert body["type"] == "about:blank"
+    assert body["type"] == "/problems/bad-user-input"
     assert body["title"] == "Bad Request"
     assert body["status"] == 400
+    assert body["instance"] == "/messages"
     assert body["code"] == "BAD_USER_INPUT"
     assert {p["name"] for p in body["invalidParams"]} == {"title", "content", "authorId"}
     reasons = {p["name"]: p["reason"] for p in body["invalidParams"]}
