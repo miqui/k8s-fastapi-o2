@@ -25,9 +25,9 @@ spec:
       images:
         # manifestTargets.kustomize.name is the image name as written in the Deployment specs
         # (k8s/kustomization.yaml renames it to the Docker Hub name) - the override is applied
-        # like `kustomize edit set image message-service=docker.io/miqui/message-service:<tag>`.
+        # like `kustomize edit set image message-service=docker.io/miqui/rest-message-api:<tag>`.
         - alias: message-service
-          imageName: docker.io/miqui/message-service
+          imageName: docker.io/miqui/rest-message-api
           manifestTargets:
             kustomize:
               name: message-service

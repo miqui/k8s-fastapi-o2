@@ -17,5 +17,5 @@ resources:
 
 images:
   - name: message-service
-    newName: docker.io/miqui/message-service
+    newName: docker.io/miqui/rest-message-api
     newTag: latest

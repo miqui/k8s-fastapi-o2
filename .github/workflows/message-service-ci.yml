@@ -96,7 +96,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            docker.io/miqui/message-service:${{ steps.meta.outputs.tag }}
-            docker.io/miqui/message-service:latest
+            docker.io/miqui/rest-message-api:${{ steps.meta.outputs.tag }}
+            docker.io/miqui/rest-message-api:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
