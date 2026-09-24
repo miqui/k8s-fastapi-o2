@@ -17,7 +17,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/miqui/k8s-graphql-apollo-prisma-o2.git
+    repoURL: https://github.com/miqui/k8s-fastapi-o2.git
     targetRevision: main
     path: k8s/observability
   destination:
@@ -32,7 +32,7 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
-      # Same as the graphql-apollo-prisma-o2 Application: without this, ignoreDifferences below
+      # Same as the fastapi-o2 Application: without this, ignoreDifferences below
       # only suppresses drift *detection*, and every sync would still overwrite the real
       # credentials with the committed placeholders.
       - RespectIgnoreDifferences=true

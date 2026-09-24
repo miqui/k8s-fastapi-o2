@@ -17,8 +17,8 @@ spec:
       nodeSelector:
         workload: api
       securityContext:
-        # runAsUser is set explicitly, not just runAsNonRoot: the image's `USER node` is a name,
-        # not a number, so the kubelet can't verify it's non-root on its own. 1000 is node's uid.
+        # runAsUser is set explicitly as well as runAsNonRoot: 1000 is the image's numeric `app`
+        # uid/gid (see the Dockerfile), which is what lets the kubelet verify it's non-root.
         # The container-level securityContexts below (no privilege escalation, no capabilities)
         # are what the Kyverno policies in k8s/policies/ require.
         runAsNonRoot: true
@@ -101,10 +101,10 @@ spec:
           resources:
             requests:
               cpu: "250m"
-              memory: "512Mi"
+              memory: "256Mi"
             limits:
               cpu: "1000m"
-              memory: "1024Mi"
+              memory: "512Mi"
           startupProbe:
             httpGet:
               path: /health/liveness

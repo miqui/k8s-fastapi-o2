@@ -1,4 +1,4 @@
-# Argo CD Image Updater (v1.x) config: watches the two Docker Hub repos CI pushes to and, on a
+# Argo CD Image Updater (v1.x) config: watches the Docker Hub repo CI pushes to and, on a
 # new tag, patches the Application's Kustomize image overrides directly (the default "argocd"
 # write-back method) - no git commits, so neither CI nor Image Updater ever needs push access
 # to this repo.
@@ -11,11 +11,11 @@
 apiVersion: argocd-image-updater.argoproj.io/v1alpha1
 kind: ImageUpdater
 metadata:
-  name: graphql-apollo-prisma-o2
+  name: fastapi-o2
   namespace: argocd
 spec:
   applicationRefs:
-    - namePattern: graphql-apollo-prisma-o2
+    - namePattern: fastapi-o2
       commonUpdateSettings:
         updateStrategy: alphabetical
         allowTags: "regexp:^[0-9]{14}-[0-9a-f]{7}$"
@@ -31,8 +31,3 @@ spec:
           manifestTargets:
             kustomize:
               name: message-service
-        - alias: issue-service
-          imageName: docker.io/miqui/issue-service
-          manifestTargets:
-            kustomize:
-              name: issue-service

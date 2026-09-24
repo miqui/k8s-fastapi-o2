@@ -1,16 +1,16 @@
-# ArgoCD Application syncing k8s/ (Postgres, Hazelcast, message-service, issue-service, Ingress,
+# ArgoCD Application syncing k8s/ (Postgres, Hazelcast, message-service, Ingress,
 # ResourceQuota - everything k8s/kustomization.yaml produces) - replaces the manual
-# `kubectl apply -k k8s/` step in deploy-kind.sh. Which image tags message-service/issue-service
-# run is decided by Argo CD Image Updater, configured in image-updater.yaml alongside this file.
+# `kubectl apply -k k8s/` step in deploy-kind.sh. Which image tag message-service
+# runs is decided by Argo CD Image Updater, configured in image-updater.yaml alongside this file.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: graphql-apollo-prisma-o2
+  name: fastapi-o2
   namespace: argocd
 spec:
   project: default
   source:
-    repoURL: https://github.com/miqui/k8s-graphql-apollo-prisma-o2.git
+    repoURL: https://github.com/miqui/k8s-fastapi-o2.git
     targetRevision: main
     path: k8s
   destination:

@@ -1,45 +1,46 @@
-# Message Service (GraphQL / Apollo Server + Prisma + PostgreSQL on Kubernetes)
+# Message Service (FastAPI + SQLAlchemy + PostgreSQL on Kubernetes)
 
-A GraphQL API (Node.js 22+/TypeScript, [Apollo Server](https://www.apollographql.com/docs/apollo-server/))
-exposing `Message` and `Author` types, persisting through [Prisma](https://www.prisma.io/) against a
-PostgreSQL database, deployed to a local [kind](https://kind.sigs.k8s.io/) cluster.
+A REST API (Python 3.13, [FastAPI](https://fastapi.tiangolo.com/)) for `Message` and `Author`
+resources, persisting through [SQLAlchemy](https://www.sqlalchemy.org/) 2.0 (async) against a
+PostgreSQL database, with a Hazelcast read-through cache, deployed to a local
+[kind](https://kind.sigs.k8s.io/) cluster. The REST surface is documented in
+[API-DESIGN.md](API-DESIGN.md) and, when `API_DOCS_ENABLED=true`, served as OpenAPI at `/docs`.
 
-This is a GraphQL rewrite of a sibling Spring Boot + MyBatis REST API (`k8s-springboot-mybatis-o2`,
-kept as the local `java-origin` git remote for reference — see [Git history](#git-history) below).
-Everything below the application layer — PostgreSQL, the standalone Hazelcast cache member, the kind
-cluster topology, ingress, and the full observability stack — is unchanged from that sibling project.
-
-This repo also hosts a second, independent GraphQL API alongside this one: **issue-service**
-(`issue-service/`), a Jira-lite issue tracker with a more complex schema (nested relations, enums,
-threaded comments, cursor pagination). Same stack (Apollo Server + Prisma + Express), same kind
-cluster, its own Deployment/Service/HPA/Ingress and its own database on the shared Postgres instance
-— see [Issue Service](#issue-service-second-graphql-api) below.
+Everything below the application layer - PostgreSQL, the standalone Hazelcast cache member, the kind
+cluster topology, ingress, Argo CD, Kyverno and the full observability stack - is the platform this
+service runs on. [NEW-PROJECT-BLUEPRINT.md](NEW-PROJECT-BLUEPRINT.md) describes the contracts an
+application must satisfy for that platform to keep working.
 
 ## Stack URLs
 
 Once `deploy-kind.sh` completes, the stack is reachable at (`*.localhost` resolves to `127.0.0.1`
-on macOS/most Linux out of the box — see [Deployment with Kind / Kubernetes](#deployment-with-kind--kubernetes)):
+on macOS/most Linux out of the box - see [Deployment with Kind / Kubernetes](#deployment-with-kind--kubernetes)):
 
 | Component | URL | Notes |
 | --- | --- | --- |
-| message-service GraphQL | `http://localhost/graphql` | [Apollo Server](#graphql-api) |
+| message-service REST API | `http://localhost/messages`, `http://localhost/authors` | see [REST API](#rest-api) |
+| message-service API docs | `http://localhost/docs` | OpenAPI UI; only while `API_DOCS_ENABLED=true` (it is, in this dev cluster) |
 | message-service health | `http://localhost/health/liveness` | |
-| issue-service GraphQL | `http://localhost/issues/graphql` | see [Issue Service](#issue-service-second-graphql-api) |
-| issue-service health | `http://localhost/issues/health/liveness` | |
-| Grafana | `http://grafana.localhost/` | credentials via Secret / 1Password — see [Viewing metrics in Grafana](#viewing-metrics-in-grafana) |
+| Grafana | `http://grafana.localhost/` | credentials via Secret / 1Password - see [Viewing metrics in Grafana](#viewing-metrics-in-grafana) |
 | OpenObserve | `http://openobserve.localhost/` | credentials via Secret / 1Password |
 | Headlamp | `http://headlamp.localhost/` | Kubernetes dashboard; login needs a bearer token, see [Headlamp](#viewing-metrics-in-grafana) |
 | ArgoCD | `http://argocd.localhost/` | GitOps sync UI; login is `admin` / see [Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd) |
-| Prometheus | `http://localhost:9090` | not exposed via Ingress — `kubectl port-forward -n observability svc/prometheus 9090:9090` |
+| Prometheus | `http://localhost:9090` | not exposed via Ingress - `kubectl port-forward -n observability svc/prometheus 9090:9090` |
+
 
 ## Architecture
 
-- **API**: Apollo Server (`src/schema.ts` typeDefs) -> resolvers (`src/resolvers.ts`) -> Prisma Client
-  (`src/prisma.ts`), served over Express at `POST /graphql`.
+- **API**: FastAPI app (`app/main.py`) -> thin routers (`app/routers/`) -> service layer
+  (`app/services/`: optimistic locking, cache-aside) -> SQLAlchemy async ORM (`app/models.py`,
+  `app/db.py`), served by uvicorn on `:8080`, one worker per pod (the HPA scales out). Pydantic v2
+  models (`app/schemas.py`) validate requests; every error is RFC 9457 `application/problem+json`
+  (`app/errors.py`).
 - **Data model**: `Author` (id, name, email) has many `Message`s (id, title, content, `version` for
-  optimistic locking, `author` relation) - see [prisma/schema.prisma](prisma/schema.prisma). Prisma
-  migrations (`prisma/migrations/`) replace the old `schema.sql`; `prisma migrate deploy` runs
-  idempotently on every container startup (see the Dockerfile's `ENTRYPOINT`).
+  optimistic locking, `author` relation) - see [app/models.py](app/models.py). Alembic migrations
+  (`migrations/`) create the schema; `alembic upgrade head` runs on every container start, guarded
+  by a Postgres advisory lock so three replicas starting together don't race (see the Dockerfile's
+  `ENTRYPOINT` and `migrations/env.py`).
+
 - **Cluster topology** (`k8s/kind-config.yaml`): 1 control-plane + 6 workers.
   - 2 workers labeled `workload=api` — the `message-service` Deployment (3 replicas) is pinned there
     via `nodeSelector`, with preferred pod anti-affinity so replicas spread across those nodes. A
@@ -60,37 +61,42 @@ on macOS/most Linux out of the box — see [Deployment with Kind / Kubernetes](#
     namespace) is pinned to the `workload=observability` node too, alongside Grafana - it's a
     lightweight single-pod dashboard with no metrics-pipeline role of its own, so it doesn't
     warrant a dedicated node.
-- **Lookup cache**: `message(id)` reads through a `messages` map on a standalone
+- **Lookup cache**: `GET /messages/{id}` reads through a `messages` map on a standalone
   [Hazelcast](https://github.com/hazelcast/hazelcast) member (`k8s/hazelcast-deployment.yaml`,
   `k8s/hazelcast-service.yaml`) that each `message-service` pod connects to as a **client**
-  (`src/cache.ts`) rather than embedding a member per pod - that keeps the cache independent of app
-  pod restarts/scaling. `updateMessage`/`deleteMessage` evict the entry to keep the shared cache
-  correct.
+  (`app/cache.py`) rather than embedding a member per pod - that keeps the cache independent of app
+  pod restarts/scaling. `PATCH`/`DELETE /messages/{id}` evict the entry to keep the shared cache
+  correct (see [Concurrency & Transaction Isolation](#concurrency--transaction-isolation) for the
+  one extra eviction that heals a stale entry).
+
 
   There's deliberately no client-side Near Cache here: it was tried (in the original Java version of
   this app) and removed after verifying, in a real multi-pod deployment, that it went stale across
   pods after an evict - a pod other than the one that wrote an update kept serving old data
   indefinitely, since the client SDK's cross-client near-cache invalidation broadcast wasn't reliably
   reaching the other pod's near-cache. Reads go straight to the shared Hazelcast member instead,
-  which stays correct - see `src/cache.ts`'s comments. Connecting to Hazelcast is not optional: same
+  which stays correct - see `app/cache.py`'s comments. Connecting to Hazelcast is not optional: same
   as the DB connection, a missing/unreachable member fails startup rather than silently running
   without a cache.
 - **Ingress**: the control-plane node is labeled `ingress-ready=true` and maps host ports 80/443
   (see [kind's Ingress guide](https://kind.sigs.k8s.io/docs/user/ingress/)). `deploy-kind.sh` installs
   the ingress-nginx controller, and `k8s/ingress.yaml` routes all paths to `message-service`
-  (a plain `ClusterIP` Service — no NodePort). The API is reachable at `http://localhost/graphql` with
-  no port number and no `kubectl port-forward` needed. `issue-service` has its own `Ingress`
-  (`k8s/issue-service-ingress.yaml`) routing `/issues/*` to it instead - see
-  [Issue Service](#issue-service-second-graphql-api) below.
+  (a plain `ClusterIP` Service - no NodePort). The API is reachable at `http://localhost/messages`
+  with no port number and no `kubectl port-forward` needed. The API is served at `/`, so there's no
+  rewrite rule; a service added behind a path prefix would need its own `Ingress` (the
+  `rewrite-target` annotation applies to a whole Ingress object) and FastAPI's `root_path` set to
+  that prefix so the generated OpenAPI links are right.
+
 - **Observability** (`k8s/observability/`, namespace `observability`): the app pushes metrics as OTLP
-  (`@opentelemetry/sdk-metrics` + `@opentelemetry/exporter-metrics-otlp-http`, see `src/telemetry.ts`)
+  (`opentelemetry-sdk` + `opentelemetry-exporter-otlp-proto-http`, see `app/telemetry.py`)
   to an **OpenTelemetry Collector** (`otel-collector`, `otel/opentelemetry-collector-contrib`), which
   re-exposes them in Prometheus format on port 8889. **Prometheus** scrapes the collector, and
-  **Grafana** (provisioned with that Prometheus datasource and pre-built dashboards — request
-  rate/latency, event-loop lag, process memory, Prisma connection-pool stats) is exposed via
+  **Grafana** (provisioned with that Prometheus datasource and pre-built dashboards - request
+  rate/latency by route, event-loop lag, process memory, DB connection-pool stats) is exposed via
   `k8s/observability/ingress.yaml` at `http://grafana.localhost/` (credentials configured via Secrets /
   1Password, see `k8s/observability/grafana-secret.yaml`). `*.localhost` resolves to `127.0.0.1` on
   modern OSes/browsers without any `/etc/hosts` change.
+
 
   **OpenObserve** (`openobserve/openobserve-standalone` Helm chart - single-node, not the HA chart;
   installed by `deploy-kind.sh`, values in `k8s/observability/openobserve-values.yaml`) is a second,
@@ -99,7 +105,7 @@ on macOS/most Linux out of the box — see [Deployment with Kind / Kubernetes](#
   `k8s/observability/openobserve-values.yaml` and `k8s/observability/openobserve-prometheus-secret.yaml`
   - the latter is what Prometheus itself authenticates with, kept out of its ConfigMap on principle
   even though this is all disposable local-kind-only). Query its data under the `default` org, stream
-  names matching the Prometheus metric names (e.g. `graphql_requests_total`,
+  names matching the Prometheus metric names (e.g. `http_requests_total`,
   `container_memory_working_set_bytes`).
 
   **[Headlamp](https://headlamp.dev/)** (`headlamp/headlamp` Helm chart, own `headlamp` namespace -
@@ -128,27 +134,31 @@ on macOS/most Linux out of the box — see [Deployment with Kind / Kubernetes](#
 
 ## Continuous Deployment with ArgoCD
 
-Both APIs are deployed via GitOps rather than the local build/load loop described in
+The API is deployed via GitOps rather than the local build/load loop described in
 [Pushing a code change to the running cluster](#pushing-a-code-change-to-the-running-cluster):
 GitHub Actions builds and pushes images to Docker Hub, and [ArgoCD](https://argo-cd.readthedocs.io/)
 (`deploy-kind.sh` installs it into its own `argocd` namespace, exposed at `http://argocd.localhost/`)
 plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take it from there.
 
-- **CI** (`.github/workflows/message-service-ci.yml`, `issue-service-ci.yml`): on push to `main`,
-  path-filtered so a change to one service doesn't rebuild the other, each workflow runs `npm ci &&
-  npm run build` as a typecheck gate, then builds and pushes
-  `docker.io/miqui/message-service`/`issue-service`, tagged `<UTC yyyymmddHHMMSS>-<7-char sha>`
-  (e.g. `20260918140501-a1b2c3d`, sortable by build time yet traceable to a commit) plus a floating
-  `:latest`. Images are built for both `linux/amd64` and `linux/arm64` (via QEMU): kind's nodes
-  run the host's architecture (arm64 on Apple Silicon), and an amd64-only image fails to pull there
-  with `no match for platform in manifest`. Push credentials (`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`, a **read/write** Docker Hub
-  access token, not the account password) are GitHub Actions repository secrets, never committed.
-- **ArgoCD** owns one `Application` (`k8s/argocd/application.yaml`, `graphql-apollo-prisma-o2`)
-  whose source is this repo's `k8s/` Kustomization - the same Postgres/Hazelcast/message-service/
-  issue-service/Ingress/ResourceQuota set `kubectl apply -k k8s/` used to apply directly.
-  `syncPolicy.automated: { prune: true, selfHeal: true }` means any manifest change pushed to
-  `main` (or drift corrected by hand in the live cluster) gets reconciled automatically. This repo
-  is public, so ArgoCD clones it anonymously - no repository credential is needed.
+- **CI** (`.github/workflows/message-service-ci.yml`): on push to `main` (and on pull requests, up
+  to the test gate), path-filtered to `app/**`, `migrations/**`, `pyproject.toml`, `uv.lock` and the
+  `Dockerfile`, the workflow runs `ruff check`, `pyright` and `pytest` (against a Postgres service
+  container) as a gate, then builds and pushes `docker.io/miqui/message-service`, tagged
+  `<UTC yyyymmddHHMMSS>-<7-char sha>` (e.g. `20260918140501-a1b2c3d`, sortable by build time yet
+  traceable to a commit) plus a floating `:latest`. Images are built for both `linux/amd64` and
+  `linux/arm64` (via QEMU): kind's nodes run the host's architecture (arm64 on Apple Silicon), and an
+  amd64-only image fails to pull there with `no match for platform in manifest`. Push credentials
+  (`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`, a **read/write** Docker Hub access token, not the account
+  password) are GitHub Actions repository secrets, never committed.
+- **ArgoCD** owns one `Application` (`k8s/argocd/application.yaml`, `fastapi-o2`) whose source is
+  this repo's `k8s/` Kustomization - the Postgres/Hazelcast/message-service/Ingress/ResourceQuota set
+  `kubectl apply -k k8s/` would apply directly. `syncPolicy.automated: { prune: true, selfHeal: true }`
+  means any manifest change pushed to `main` (or drift corrected by hand in the live cluster) gets
+  reconciled automatically. This repo is public, so ArgoCD clones it anonymously - no repository
+  credential is needed. The three Applications' `repoURL` is
+  `https://github.com/miqui/k8s-fastapi-o2.git`: that repository must exist, with these manifests on
+  `main`, before `deploy-kind.sh` runs.
+
 - **Observability** is a second `Application` (`k8s/argocd/observability-application.yaml`, `observability`)
   syncing `k8s/observability/` into the `observability` namespace, with the same automated prune/self-heal.
   A merged dashboard, scrape-config or collector-config change therefore reaches the cluster through Argo
@@ -160,8 +170,7 @@ plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take 
   [`ARGOCD.md`](ARGOCD.md) for the details and the one-time bootstrap on an existing cluster.
 - **Argo CD Image Updater** (v1.x, pinned to `v1.3.0` in `deploy-kind.sh`) is configured by an
   `ImageUpdater` custom resource (`k8s/argocd/image-updater.yaml`) - v1.x replaced v0.x's
-  Application annotations with this CRD. It watches `docker.io/miqui/message-service` and
-  `.../issue-service`, considers only tags matching `^[0-9]{14}-[0-9a-f]{7}$` (so never the
+  Application annotations with this CRD. It watches `docker.io/miqui/message-service`, considers only tags matching `^[0-9]{14}-[0-9a-f]{7}$` (so never the
   floating `:latest`), and picks the highest one with the `alphabetical` strategy - i.e. the newest
   build, given the timestamp-prefixed tags. `newest-build` would be the obvious strategy but its
   docs advise against it on Docker Hub: it fetches a manifest per tag to read creation dates, and
@@ -181,8 +190,8 @@ plus [Argo CD Image Updater](https://argocd-image-updater.readthedocs.io/) take 
   `RespectIgnoreDifferences=true` sync option. Both are needed: `ignoreDifferences` alone only
   suppresses drift *detection*, while every sync - including the one Image Updater triggers when it
   changes an image - still applies the full manifest and would overwrite the real Secret, which
-  breaks Postgres auth for any pod that starts afterward (`P1000: Authentication failed ...
-  credentials for YOUR_POSTGRES_DB_USER`). This was hit for real on the first rollout.
+  breaks Postgres auth for any pod that starts afterward (`password authentication failed for
+  user "YOUR_POSTGRES_DB_USER"`). This was hit for real on the first rollout.
 - **Login**: `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o
   jsonpath='{.data.password}' | base64 -d` (same bearer-token-retrieval idiom as Headlamp above).
   `argocd-server` is patched with `--insecure` so the plain-HTTP `*.localhost` Ingress pattern used
@@ -223,12 +232,12 @@ ReplicaSet events. `disallow-latest-tag` is audit-only on purpose: `k8s/kustomiz
 tag, so denying it would block the first rollout.
 
 **Hardened workloads.** To pass the enforce set, the `default`-namespace workloads now set a
-`securityContext`: message-service/issue-service run as uid/gid 1000 (the image's `USER node` is a
-name, not a number, so `runAsUser` has to be explicit for `runAsNonRoot` to be verifiable), postgres
+`securityContext`: message-service runs as uid/gid 1000 (the image's numeric `app` user - the kubelet can only verify
+`runAsNonRoot` for a numeric uid, so `runAsUser` is set explicitly as well), postgres
 as 70 (its exporter sidecar as 65534) and hazelcast as 100:101, all with privilege escalation off and
 all capabilities dropped. A Postgres volume first initialized by the old root-started container is
 already owned by uid 70, so nothing needs migrating - but the securityContext change rolls
-`postgres-0`, which means a short database outage for both APIs the first time it syncs.
+`postgres-0`, which means a short database outage for the API the first time it syncs.
 
 **Exceptions** (`k8s/policies/exceptions/`) record known, accepted violations: `node-exporter` (it
 needs `hostNetwork`/`hostPID`, a `hostPath` mount of `/` and a `hostPort` to read node metrics) is
@@ -305,76 +314,19 @@ A `kubectl` cheat sheet for debugging denials, audit findings and Kyverno itself
   "missing permissions". A fresh install doesn't hit this: the grant is in the Helm values, so it
   already exists when the policies are first created.
 
-## Issue Service (second GraphQL API)
-
-`issue-service/` is a second, fully independent GraphQL API in this same repo - same stack
-(Apollo Server + Prisma + Express + TypeScript), deployed to the same kind cluster, but its own
-npm package, own Prisma schema, own Docker image, and own set of Kubernetes manifests. It exists to
-demonstrate hosting more than one GraphQL API on this stack side by side.
-
-- **Domain**: a Jira-lite issue tracker - `Workspace` → `Project` → `Issue`, with `Label`s
-  (many-to-many with `Issue`) and threaded `Comment`s (self-referential `parent`/`replies`). See
-  `issue-service/prisma/schema.prisma` and `issue-service/src/schema.ts`. Compared to
-  message-service's `Author`/`Message` model, this schema is intentionally more complex: a `Node`
-  interface, two enums (`IssueStatus`, `Priority`), a self-relation, an implicit many-to-many, and
-  Relay-style cursor pagination (`IssueConnection`/`IssueEdge`/`PageInfo`) on `Project.issues`
-  instead of message-service's offset pagination.
-- **Database**: its own `issuedb` database on the *same* shared Postgres StatefulSet message-service
-  uses, rather than a second Postgres instance - `k8s/postgres-init-configmap.yaml` mounts a
-  `CREATE DATABASE issuedb;` script into `/docker-entrypoint-initdb.d` alongside the `messagedb`
-  the official postgres image already bootstraps via `POSTGRES_DB` (see
-  `k8s/postgres-config` in `k8s/configmap.yaml`). Both databases are owned by the same
-  `postgres-credentials` user - simplest option for a disposable local cluster; a real deployment
-  would likely give each service its own database credentials.
-- **No cache**: unlike message-service, issue-service does not connect to Hazelcast. Hazelcast here
-  is a purpose-built read-through/write-through cache for one hot path
-  (`getMessageById`/`evictCachedMessage` in message-service's `src/cache.ts`) - nothing in
-  issue-service's resolvers has an equivalent proven hot path yet, so requiring Hazelcast readiness
-  without using it would just add a dependency for no benefit. It can be added the same way later if
-  a resolver needs it.
-- **Kubernetes**: a fully separate `Deployment`/`Service`/`HorizontalPodAutoscaler` (mirroring
-  message-service's, minus the `wait-for-hazelcast` init container), pinned to the same
-  `workload=api` nodes -
-  `k8s/issue-service-deployment.yaml`, `k8s/issue-service-service.yaml`, `k8s/issue-service-hpa.yaml`.
-  This means it scales and rolls out independently of message-service; a crash in one doesn't affect
-  the other.
-- **Ingress**: a separate `Ingress` object, `k8s/issue-service-ingress.yaml`, routing
-  `http://localhost/issues/*` to it. It's a separate `Ingress` resource (not a second path on
-  `k8s/ingress.yaml`) because `nginx.ingress.kubernetes.io/rewrite-target` applies to the whole
-  Ingress object, not per-path, and it strips the `/issues` prefix before forwarding
-  (`nginx.ingress.kubernetes.io/rewrite-target: /$2` against path regex `/issues(/|$)(.*)`) so the
-  app itself still mounts plain `/graphql` and `/health/*` routes, same as message-service. The
-  GraphQL endpoint is `http://localhost/issues/graphql`.
-- **Observability**: pushes the same OTLP metrics as message-service to the same OTel Collector
-  (`src/telemetry.ts`), tagged with `service.name = "issue-service"` so Prometheus/Grafana can tell
-  the two APIs' series apart - it isn't wired into the pre-built Grafana dashboards (those are
-  scoped to message-service's metrics), but the raw series are there to query/graph.
-- **Local dev**: same pattern as message-service -
-  ```bash
-  cd issue-service
-  npm install
-  DATABASE_URL=postgresql://issue_app:issue_app@localhost:5432/issuedb npm run prisma:migrate:deploy
-  npm run build
-  npm start
-  ```
-  or `npm run dev` for auto-reload. Both services' Docker Hub images are built and pushed by their
-  own GitHub Actions workflow (see [Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd)),
-  and `deploy-kind.sh` registers a single ArgoCD `Application` that applies both services'
-  manifests together and waits on both Deployments' rollouts.
-
 ## Git history
 
-The local `.git` directory was carried over from the original Spring Boot/MyBatis project on purpose,
-as background reference for this rewrite - `git log` / `git show` against commits before this
-migration still show the Java implementation. That remote is kept as `java-origin`; this project's own
-GitHub remote (`origin`) is a separate, newly created repository.
+The local `.git` directory was carried over on purpose, as background reference: `git log` /
+`git show` against earlier commits still show the previous implementations of this service (the
+`java-origin` remote points at the original project).
 
 ## Running the Application
 
 ### 1. Local run against PostgreSQL + Hazelcast
 
-Start a local PostgreSQL instance (or reuse the one deployed in kind — see below), plus a local
-Hazelcast member for the cache, and point the app at both:
+Requires [uv](https://docs.astral.sh/uv/) (it installs the Python version pinned in
+`.python-version` for you). Start a local PostgreSQL instance (or reuse the one deployed in kind -
+see below), plus a local Hazelcast member for the cache, and point the app at both:
 
 ```bash
 docker run --rm -d --name message-postgres \
@@ -385,40 +337,61 @@ docker run --rm -d --name message-hazelcast \
   -e HZ_CLUSTERNAME=message-service-cache \
   -p 5701:5701 hazelcast/hazelcast:5.5.0
 
-npm install
-npm run prisma:migrate:deploy
-npm run build
-npm start
+uv sync
+uv run alembic upgrade head
+API_DOCS_ENABLED=true uv run python -m app
 ```
 
-*Or, for iterative development with auto-reload: `npm run dev` (uses `tsx watch`, no build step).*
+*For iterative development with auto-reload:
+`uv run uvicorn app.main:create_app --factory --reload` (skips the graceful-shutdown wrapper in
+`app/__main__.py`, which only matters under Kubernetes).*
 
-Datasource connection details are configurable via environment variables (see `src/env.ts`):
-`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`. Defaults connect to
-`localhost:5432/messagedb` with `message_app`/`message_app`. Hazelcast connection details are
-`HAZELCAST_HOST`/`HAZELCAST_PORT`, defaulting to `localhost:5701`. If you skip starting a local
-Hazelcast member, the app will fail to start (the client connection is required, not optional) -
-that's deliberate, matching how the DB connection behaves.
+Configuration is environment variables (see `app/settings.py`): `DB_HOST`, `DB_PORT`, `DB_NAME`,
+`DB_USER`, `DB_PASSWORD` - defaults connect to `localhost:5432/messagedb` with
+`message_app`/`message_app`; `HAZELCAST_HOST`/`HAZELCAST_PORT` (default `localhost:5701`);
+`OTEL_METRICS_URL`/`OTEL_TRACES_URL`; `API_DOCS_ENABLED` (exactly `"true"` or `"false"`, default
+`false`; anything else fails startup); `CORS_ALLOWED_ORIGINS`; `PORT` (default `8080`). If you skip
+starting a local Hazelcast member, the app will fail to start (the client connection is required, not
+optional) - that's deliberate, matching how the DB connection behaves.
 
-The GraphQL endpoint is `http://localhost:8080/graphql` (`PORT` env var to change it); Apollo Server's
-own landing page there gives you an in-browser query explorer against the live schema (see
-[GraphQL API](#graphql-api) below). Liveness/readiness probes are at `/health/liveness` and
-`/health/readiness`.
+The API is at `http://localhost:8080` (`/messages`, `/authors`; interactive docs at
+`http://localhost:8080/docs` with `API_DOCS_ENABLED=true`). Liveness/readiness probes are at
+`/health/liveness` and `/health/readiness`.
 
 ---
 
-### 2. Building the app
+### 2. Checks (lint, types, tests)
 
 ```bash
-npm install
-npm run build
+uv run ruff check
+uv run pyright
+uv run pytest
 ```
 
-Compiles `src/` to `dist/` via `tsc` (`tsconfig.json`). `npm run prisma:generate` regenerates the
-Prisma Client after any `prisma/schema.prisma` change (also run automatically whenever `npm install`
-runs, via Prisma's own postinstall hook).
+`pytest` runs against a real Postgres, never the dev `messagedb`: by default a `messagedb_test`
+database on `localhost:5432` (override with the same `DB_*` variables the service reads). The
+schema is created by running the real Alembic migration, so the migration is tested too; Hazelcast is
+replaced by an in-memory fake. With the Postgres container above running:
+
+```bash
+docker exec message-postgres psql -U message_app -d messagedb -c 'CREATE DATABASE messagedb_test'
+```
 
 ---
+
+### 3. Building the image
+
+```bash
+docker build -t message-service:local .
+docker run --rm --entrypoint id message-service:local   # uid=1000(app) gid=1000(app)
+```
+
+Multi-stage build: `uv sync --frozen` from `uv.lock` into a venv, copied into a slim runtime image
+that runs as uid/gid 1000. The entrypoint is `alembic upgrade head && exec python -m app`, so the
+server is PID 1 and receives `SIGTERM` directly.
+
+---
+
 
 ## Deployment with Kind / Kubernetes
 
@@ -434,13 +407,12 @@ runs, via Prisma's own postinstall hook).
     worker, 1 cache worker, 1 OpenObserve worker) if it doesn't exist yet.
   - Installs the ingress-nginx controller and waits for it to become ready.
   - Installs metrics-server (patched with `--kubelet-insecure-tls`) and waits for it to become ready -
-    required for the `message-service` and `issue-service` `HorizontalPodAutoscaler`s to read
-    CPU/memory usage.
+    required for the `message-service` `HorizontalPodAutoscaler` to read CPU/memory usage.
   - Installs ArgoCD and Argo CD Image Updater into the `argocd` namespace, configures Image
     Updater's read-only Docker Hub credentials, and exposes the ArgoCD UI at
     `http://argocd.localhost/` - see [Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd).
-    `message-service`/`issue-service` images are no longer built or `kind load`-ed locally; they
-    come from Docker Hub, built and pushed by GitHub Actions on push to `main`.
+    The `message-service` image is not built or `kind load`-ed locally; it comes from Docker Hub,
+    built and pushed by GitHub Actions on push to `main`.
   - Installs [Kyverno](#policy-as-code-with-kyverno) via Helm (`kyverno/kyverno`, chart `3.9.1` =
     Kyverno v1.19.1, values in `k8s/kyverno/kyverno-values.yaml`) into its own `kyverno` namespace,
     before the observability stack, and waits for its `ValidatingPolicy`/`PolicyException` CRDs.
@@ -455,42 +427,39 @@ runs, via Prisma's own postinstall hook).
     so the enforce policies already exist when the workloads first sync. It tracks `main`, so
     `k8s/policies/` has to be merged before you run the script.
   - Registers the ArgoCD `Application` that owns `k8s/` (replacing a direct `kubectl apply -k
-    k8s/`): `Secret` + `ConfigMap`s, the `postgres` `StatefulSet`/headless `Service` (with an init
-    script creating the `issuedb` database alongside `messagedb` - see
-    [Issue Service](#issue-service-second-graphql-api) above), the `hazelcast` `Deployment`/`Service`,
-    and, for each of `message-service`/`issue-service`, a `Deployment`/`Service`
-    (`ClusterIP`)/`HorizontalPodAutoscaler` and its own `Ingress`. Waits for the `Application`'s
-    first sync, then dynamically injects the real PostgreSQL database credentials from environment
-    (overwriting the placeholder `k8s/secret.yaml` ArgoCD just synced).
-  - Waits for PostgreSQL and Hazelcast to become ready before waiting on both APIs' rollouts (the
-    `message-service` Deployment runs `wait-for-postgres` and `wait-for-hazelcast` init containers;
-    `issue-service` only `wait-for-postgres`, since it has no cache dependency).
+    k8s/`): `Secret` + `ConfigMap`s, the `postgres` `StatefulSet`/headless `Service` (which creates
+    `messagedb` via `POSTGRES_DB`), the `hazelcast` `Deployment`/`Service`, and the `message-service`
+    `Deployment`/`Service` (`ClusterIP`)/`HorizontalPodAutoscaler`/`Ingress`. Waits for the
+    `Application`'s first sync, then dynamically injects the real PostgreSQL database credentials
+    from environment (overwriting the placeholder `k8s/secret.yaml` ArgoCD just synced).
+  - Waits for PostgreSQL and Hazelcast to become ready before waiting on the API's rollout (the
+    `message-service` Deployment runs `wait-for-postgres` and `wait-for-hazelcast` init containers).
 - **Tear down cluster**: `./teardown-kind.sh`
-- **Test endpoints**: `./test-api.sh`
+- **Test endpoints**: `./test-api.sh` (exits non-zero on any failed check; `BASE_URL=... ./test-api.sh` to
+  point it elsewhere)
 
 ### Pushing a code change to the running cluster
 
-Code changes no longer go through a local `docker build`/`kind load`/`rollout restart` loop - see
-[Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd) below. The flow is now:
+Code changes don't go through a local `docker build`/`kind load`/`rollout restart` loop - see
+[Continuous Deployment with ArgoCD](#continuous-deployment-with-argocd) above. The flow is:
 
-1. `git push` to `main` (a change under `src/**`/`prisma/**` etc. for message-service, or anything
-   under `issue-service/**`) triggers that service's GitHub Actions workflow
-   (`.github/workflows/message-service-ci.yml` / `issue-service-ci.yml`), which builds and pushes a
-   new commit-SHA-tagged image to Docker Hub.
+1. `git push` to `main` (a change under `app/**`, `migrations/**`, `pyproject.toml`, `uv.lock` or the
+   `Dockerfile`) triggers `.github/workflows/message-service-ci.yml`, which lints, type-checks, tests,
+   then builds and pushes a new commit-SHA-tagged image to Docker Hub.
 2. Argo CD Image Updater (polling every 2 minutes by default) notices the new tag and updates the
-   ArgoCD `Application`'s image override for that service.
-3. ArgoCD syncs the change, and `kubectl rollout status deployment/message-service` (or
-   `issue-service`) shows the rolling update happening - same rolling-update behavior as before,
-   just triggered by ArgoCD instead of a manual `kubectl rollout restart`.
+   ArgoCD `Application`'s image override.
+3. ArgoCD syncs the change, and `kubectl rollout status deployment/message-service` shows the rolling
+   update happening.
 
-This also runs `prisma migrate deploy` again on every pod start (see the Dockerfile's
-`ENTRYPOINT`) - idempotent, so a code-only change is a no-op there; a schema change picks up its
-new migration automatically.
+This also runs `alembic upgrade head` again on every pod start (see the Dockerfile's `ENTRYPOINT`) -
+idempotent, so a code-only change is a no-op there; a schema change picks up its new migration
+automatically, and with three pods starting at once the advisory lock in `migrations/env.py` makes
+exactly one of them apply it.
 
-**This is a slower inner loop than the old local flow** (CI time + up to one Image Updater poll
-interval, vs. seconds) - it's the deploy step, not the "test my change" step. For fast iteration,
-keep using `npm run dev` (or `cd issue-service && npm run dev`) against a local Postgres/Hazelcast,
-as described in [Local run against PostgreSQL + Hazelcast](#1-local-run-against-postgresql--hazelcast)
+**This is a slower inner loop than a local run** (CI time + up to one Image Updater poll interval,
+vs. seconds) - it's the deploy step, not the "test my change" step. For fast iteration, keep using
+`uv run uvicorn app.main:create_app --factory --reload` against a local Postgres/Hazelcast, as
+described in [Local run against PostgreSQL + Hazelcast](#1-local-run-against-postgresql--hazelcast)
 above, and only push to `main` once you're ready to deploy.
 
 A change to a manifest itself (env vars, resources, the Ingress, a new Kustomize resource, etc.)
@@ -499,14 +468,15 @@ from git the next time it reconciles (or immediately via the ArgoCD UI/CLI's man
 don't want to wait). The cluster/node topology (`k8s/kind-config.yaml`) is still unmanaged by
 ArgoCD - a `kind-config.yaml` change still needs [recreating the cluster](#adding-a-new-kind-node).
 
+
 `deploy-kind.sh` already points your current `kubectl` context at the cluster
-(`kubectl config use-context kind-kind-graphql-prisma-cluster`), so no extra kubeconfig setup is
+(`kubectl config use-context kind-kind-fastapi-cluster`), so no extra kubeconfig setup is
 needed for the commands above. If you want a standalone `kubeconfig.yml` for this cluster instead —
 e.g. to hand to another tool, or to talk to it without touching your default `~/.kube/config` context —
 generate one with:
 
 ```bash
-kind get kubeconfig --name kind-graphql-prisma-cluster > kubeconfig.yml
+kind get kubeconfig --name kind-fastapi-cluster > kubeconfig.yml
 export KUBECONFIG=./kubeconfig.yml   # use it for the current shell
 kubectl get nodes -L workload
 ```
@@ -538,8 +508,8 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
 
 2. **Recreate the cluster** with the updated config:
    ```bash
-   kind delete cluster --name kind-graphql-prisma-cluster
-   kind create cluster --name kind-graphql-prisma-cluster --config k8s/kind-config.yaml
+   kind delete cluster --name kind-fastapi-cluster
+   kind create cluster --name kind-fastapi-cluster --config k8s/kind-config.yaml
    ```
    This wipes all cluster state (PostgreSQL data, any messages created only at runtime) - it's a
    fresh cluster, rebuilt from the manifests in `k8s/`.
@@ -573,18 +543,19 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
   pre-provisioned dashboards, all in `k8s/observability/grafana-dashboard-json-configmap.yaml` as plain
   PromQL against real, verified metric names - if you add new panels, check the exact metric names
   Prometheus actually stores first (they differ from the raw OTLP names — see below):
-  - **API RED & Saturation**: the caller's-eye view of an API - GraphQL request
-    rate/latency percentiles/errors by root field, Prisma connection-pool saturation, CPU throttling,
+  - **API RED & Saturation**: the caller's-eye view of the API - request
+    rate/latency percentiles/errors by route, DB connection-pool saturation, CPU throttling,
     memory vs. limit, restarts/readiness - see [API RED & Saturation Dashboard](#api-red--saturation-dashboard) below.
-  - **graphql-api**: app-level request rate/latency by root field, event-loop lag, process memory,
-    Prisma connection-pool stats.
-  - **GraphQL Operations** / **GraphQL Errors**: traffic, latency and errors per *schema* operation
-    (query/mutation and root field) and per `extensions.code` - see
-    [GraphQL Operation & Error Dashboards](#graphql-operation--error-dashboards) below.
+  - **message-service API**: app-level request rate/latency by route, event-loop lag, process memory,
+    DB connection-pool stats.
+  - **HTTP Operations** / **HTTP Errors**: traffic, latency and errors per HTTP method and route
+    template, and per problem+json `code` - see
+    [HTTP Operation & Error Dashboards](#http-operation--error-dashboards) below.
 
-  `api-red`, `graphql-api`, `GraphQL Operations` and `GraphQL Errors` share a **Service** dropdown
-  (`message-service`, `issue-service`, or both) - the two APIs push identically named metrics through
-  the same collector, told apart only by the `service_name` label.
+  `api-red`, `message-service-api`, `http-operations` and `http-errors` share a **Service** dropdown
+  (`message-service`) - every series is filtered on the `service_name` label, so a second API pushing
+  identically named metrics through the same collector would simply show up there as another option.
+
   - **kind cluster ops**: cluster-wide node/pod health - nodes ready, pod phases/restarts, per-node
     CPU/memory/disk (via node-exporter), per-namespace container CPU/memory (via cAdvisor).
   - **PostgreSQL Ops & Queries**: connections, transaction/tuple rates, buffer cache hit ratio,
@@ -614,14 +585,14 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
   `otel-collector`, `node-exporter`, `kube-state-metrics`, and `kubernetes-nodes-cadvisor` jobs into it
   — see `write_relabel_configs` in `k8s/observability/config/prometheus.yml`; every other scraped
   job is deliberately dropped before it reaches OpenObserve), under org `default`, one stream per
-  Prometheus metric name (e.g. `graphql_requests_total`,
+  Prometheus metric name (e.g. `http_requests_total`,
   `container_memory_working_set_bytes`, `node_memory_MemAvailable_bytes`). Query it from the UI's
   Logs/Metrics explorer, or via its search API:
   ```bash
   NOW_US=$(( $(date +%s) * 1000000 )); START_US=$(( NOW_US - 3600*1000000 ))
   curl -s -u "$ZO_ROOT_USER_EMAIL:$ZO_ROOT_USER_PASSWORD" -X POST 'http://openobserve.localhost/api/default/_search?type=metrics' \
     -H 'Content-Type: application/json' \
-    -d "{\"query\":{\"sql\":\"SELECT * FROM \\\"graphql_requests_total\\\" ORDER BY _timestamp DESC LIMIT 5\",\"start_time\":$START_US,\"end_time\":$NOW_US,\"size\":5}}"
+    -d "{\"query\":{\"sql\":\"SELECT * FROM \\\"http_requests_total\\\" ORDER BY _timestamp DESC LIMIT 5\",\"start_time\":$START_US,\"end_time\":$NOW_US,\"size\":5}}"
   ```
   (`start_time`/`end_time` are epoch microseconds; OpenObserve rejects a query whose range doesn't
   look like one, e.g. `0`.)
@@ -650,7 +621,7 @@ time via `k8s/kind-config.yaml`. Adding one means recreating the cluster.
   up: (1) `resource_to_telemetry_conversion.enabled: true` on the Prometheus exporter - without it,
   OTLP *resource* attributes like `k8s.pod.name` are dropped rather than becoming Prometheus labels,
   so metrics from every pod collapse into one indistinguishable series; (2) the app itself has to send
-  that resource attribute in the first place (`src/telemetry.ts`, sourced from a `POD_NAME` Downward
+  that resource attribute in the first place (`app/telemetry.py`, sourced from a `POD_NAME` Downward
   API env var in `k8s/deployment.yaml`).
 
 Prometheus here has no `PersistentVolumeClaim` — its data is ephemeral and resets whenever its pod
@@ -676,9 +647,10 @@ ratio (`pg_stat_database_*`), lock counts by mode (`pg_locks_count`), and checkp
 1. The `postgres` container's startup args add `shared_preload_libraries=pg_stat_statements` (must
    happen at server start, not via SQL) and `pg_stat_statements.track=all` (also count statements
    run inside functions).
-2. `CREATE EXTENSION IF NOT EXISTS pg_stat_statements` is declared via Prisma's
-   `postgresqlExtensions` preview feature (see `prisma/schema.prisma`'s `datasource` block) and
-   applied by the initial migration - it attaches to that already-preloaded library on first deploy.
+2. `CREATE EXTENSION IF NOT EXISTS pg_stat_statements` is issued by the first Alembic revision
+   (`migrations/versions/0001_initial_schema.py`) - it attaches to that already-preloaded library on
+   first deploy.
+
 3. The exporter's `--collector.stat_statements` flag (plus `--collector.stat_statements.include_query`
    for a `queryid` -> SQL-text mapping) exposes per-`queryid` call count, total time, and rows via
    `pg_stat_statements_calls_total` / `_seconds_total` / `_rows_total` - the numeric metrics are
@@ -688,11 +660,12 @@ ratio (`pg_stat_database_*`), lock counts by mode (`pg_locks_count`), and checkp
 
 If you change the postgres container's startup args or the `postgres-exporter` sidecar, the
 StatefulSet needs `kubectl apply -k k8s/` (it's part of the main Kustomization, not
-`k8s/observability/`); a Prisma migration change needs the app image rebuilt and redeployed (see
-"Pushing a code change to the running cluster" above) since `prisma migrate deploy` runs from the
-image's own `prisma/migrations/` directory. Prometheus config changes need a `kubectl rollout
+`k8s/observability/`); an Alembic migration change needs the app image rebuilt and redeployed (see
+"Pushing a code change to the running cluster" above) since `alembic upgrade head` runs from the
+image's own `migrations/` directory. Prometheus config changes need a `kubectl rollout
 restart deployment/prometheus -n observability` too - it has no `--web.enable-lifecycle` reload
 endpoint wired up, so it only reads `prometheus.yml` at startup.
+
 
 ### Hazelcast Metrics (JMX exporter)
 
@@ -735,87 +708,78 @@ escaping entirely. Key metrics used: `com_hazelcast_metrics_size{prefix="cluster
 `evictioncount`/`expirationcount` (all `prefix="map"`, per-map via `tag0`), and
 `usedheap`/`committedheap`/`maxheap` (`prefix="memory"`).
 
-### GraphQL Operation & Error Dashboards
+### HTTP Operation & Error Dashboards
 
-`graphql-operations.json` and `graphql-errors.json` break the `graphql_*` metrics down by what the
-**schema** says, not by what the client chose to call things. Both services' `metricsPlugin`
-(`src/telemetry.ts`, `issue-service/src/telemetry.ts`) label `graphql_requests_total`,
-`graphql_request_duration_ms` and `graphql_errors_total` with:
+`http-operations.json` and `http-errors.json` break `http_requests_total`,
+`http_request_duration_ms` and `http_errors_total` (all recorded by the request-metrics middleware in
+`app/telemetry.py`) down by what the **API** says, not by what the client happened to send:
 
 | Label | Values | Notes |
 | :--- | :--- | :--- |
-| `operation_type` | `query`, `mutation`, `unresolved` | `unresolved` = the request failed parse/validation before an operation was picked. |
-| `root_field` | e.g. `messages`, `createMessage`, `moveIssue`, `__schema`, `unresolved` | The schema field name (aliases are resolved), looking through fragments at the root. |
-| `error_code` (errors only) | `NOT_FOUND`, `CONFLICT`, `BAD_USER_INPUT`, `GRAPHQL_VALIDATION_FAILED`, `GRAPHQL_PARSE_FAILED`, `INTERNAL_SERVER_ERROR`, ... | From `extensions.code`, so it's a small closed set. |
+| `method` | `GET`, `POST`, `PATCH`, `DELETE` | |
+| `route` | the route *template*: `/messages`, `/messages/{id}`, `/authors`, `/authors/{id}`, `unmatched` | Taken from the matched route, never the raw path, so cardinality is bounded by the API's routes. `unmatched` = no route matched (404/405). |
+| `status_code` (requests only) | the HTTP status | |
+| `error_code` (errors only) | `BAD_USER_INPUT`, `NOT_FOUND`, `CONFLICT`, `INTERNAL_SERVER_ERROR`, `HTTP_405`, ... | The problem+json `code` of the response - a small closed set. |
 
-- **Why not the client's `operationName`?** That was the previous `operation` label. It's
-  client-controlled, so anyone can mint new series at will (the collector and OpenObserve both pay for
-  that - OpenObserve has already overflowed its MemTable once), and unnamed operations - which is what
-  every k6 script sent - all collapsed into `anonymous`. Schema root fields are bounded and always
-  present. Named operations are still visible in traces.
-- **Multi-root-field operations** (`query { messages { ... } authors { ... } }`) increment the
-  request counter and record their full duration once *per root field*, so a per-field breakdown
-  can sum to more than the number of HTTP requests.
-- **Errors are attributed to the field that failed**, using the error's `path` (its first segment is
-  the root field's response key, so aliases work). An error with no path - e.g. a missing required
-  variable (`BAD_USER_INPUT`) - counts against every root field of that operation. GraphQL errors
-  ride in HTTP 200 responses, so none of this is visible as HTTP 5xx.
-- `graphql_errors_total` is only created on the first error (an OTel counter emits nothing until
-  its first `.add()`), so panels built directly on it are empty - not zero - on a healthy system.
+- **Why the route template and not the raw path?** `/messages/<uuid>` would mint a new series per
+  message: the client would control cardinality (the collector and OpenObserve both pay for that -
+  OpenObserve has already overflowed its MemTable once).
+- **Health probes are excluded.** `/health/liveness` and `/health/readiness` are hit by the kubelet
+  every few seconds and would swamp real traffic; the middleware skips them.
+- **`http_errors_total` counts every response with status >= 400**, client errors included
+  (`NOT_FOUND`, `BAD_USER_INPUT`, `CONFLICT`). `INTERNAL_SERVER_ERROR` is the one that means a bug or
+  a failed dependency; the *Server Errors/s* panel on the HTTP Errors dashboard should stay at 0.
+- `http_errors_total` is only created on the first error (an OTel counter emits nothing until its
+  first `.add()`), so panels built directly on it are empty - not zero - on a healthy system.
   The ratio and total panels use `or vector(0)`; the by-code panels show "No errors".
 
 ### API RED & Saturation Dashboard
 
 `api-red.json`'s panels follow the standard [RED method](https://grafana.com/blog/2018/08/02/the-red-method-how-to-instrument-your-services/)
 (**R**ate, **E**rrors, **D**uration) plus enough saturation signal to explain *why* rate/errors/
-duration are moving, for the API(s) picked in the **Service** dropdown and their direct dependencies:
+duration are moving, for the API picked in the **Service** dropdown and its direct dependencies:
 
-- **Rate**: `graphql_requests_total` overall and broken down by GraphQL root field (see
-  [GraphQL Operation & Error Dashboards](#graphql-operation--error-dashboards) and the `metricsPlugin`
-  in `src/telemetry.ts`).
-- **Duration**: p50/p90/p95/p99 latency (overall and per-root-field) from
-  `graphql_request_duration_ms`.
-- **Errors**: overall error ratio (gauge, thresholds at 1%/5%) and error rate by root field, both from
-  `graphql_errors_total` - a request counts as an error whenever its GraphQL response includes a
-  non-empty `errors[]` array; the breakdown by `extensions.code` lives on the GraphQL Errors dashboard.
-- **Saturation**: Prisma connection-pool utilization (busy/idle/open) and average query/pool-wait
-  duration (`prisma_pool_connections_*` / `prisma_client_queries_*`, sampled from
-  `prisma.$metrics.json()` - see `registerPrismaMetrics` in `src/telemetry.ts`), CPU throttling
-  ratio, container memory vs. its limit, and pod restarts/readiness.
+- **Rate**: `http_requests_total` overall and broken down by route (see
+  [HTTP Operation & Error Dashboards](#http-operation--error-dashboards) and the middleware in
+  `app/telemetry.py`).
+- **Duration**: p50/p90/p95/p99 latency (overall and per route) from `http_request_duration_ms`.
+- **Errors**: overall error ratio (gauge, thresholds at 1%/5%) and error rate by route, both from
+  `http_errors_total` - a request counts as an error whenever it answers HTTP >= 400; the breakdown
+  by problem+json `code` lives on the HTTP Errors dashboard.
+- **Saturation**: DB connection-pool utilization (busy/idle/open) and average query duration
+  (`db_pool_connections_*` / `db_client_queries_duration_avg_ms`, read from the SQLAlchemy pool and
+  statement-timing events - see `setup_metrics` in `app/telemetry.py`), CPU throttling ratio,
+  container memory vs. its limit, and pod restarts/readiness.
 
-Unlike the old REST version of this dashboard, there's no `uri!~"/actuator.*"` filter needed: the
-`graphql_*` metrics are only ever recorded for real GraphQL operations against `/graphql` (see the
-Apollo plugin in `src/telemetry.ts`) - the `/health/liveness` and `/health/readiness` probe routes
-never touch that instrumentation at all, so there's no probe traffic to exclude in the first place.
+No `uri!~"/health.*"`-style filter is needed: the request-metrics middleware skips `/health/*`
+before recording anything, so there's no probe traffic to exclude in the first place.
 
 **Deliberately not implemented, so not claimed as covered by this dashboard**: 429/timeout/retry
 rates (the app has no rate limiting or explicit downstream timeouts to measure), business-outcome
-errors beyond a resolver throwing (out of scope per this dashboard's own design goal), deployment
-markers, and trace exemplars (no distributed tracing is wired up in this stack - only metrics).
-Downstream dependency RED for Postgres and Hazelcast already exist as their own dashboards (linked
-above) rather than being duplicated here.
+errors beyond an unhandled exception (out of scope per this dashboard's own design goal), deployment
+markers, and trace exemplars. Downstream dependency RED for Postgres and Hazelcast already exist as
+their own dashboards (linked above) rather than being duplicated here.
 
 ---
 
 ## Load Testing with k6
 
-The repository includes four parameterized [k6](https://k6.io/) scripts using `k6-utils` to benchmark
-and simulate concurrent GraphQL traffic against the API. They all follow the same conventions (same
+The repository includes five parameterized [k6](https://k6.io/) scripts using `k6-utils` to benchmark
+and simulate concurrent REST traffic against the API. They all follow the same conventions (same
 environment variables, same VU/think-time shape), so any of the "Running the Load Tests" commands
 below work with any of them - just swap the filename.
 
 | Script | What it exercises |
 | :--- | :--- |
-| `k6-retrieve-messages.js` | The `messages` query (read path), including a paginated `limit`/`offset` request - see [Pagination](#pagination). |
-| `k6-create-messages.js` | The `createMessage` mutation (write path); creates one shared `Author` in `setup()`. |
-| `k6-message-lifecycle.js` | Full CRUD per iteration: `createMessage` -> `message` -> `updateMessage` -> `deleteMessage`. |
-| `k6-invalid-requests.js` | Negative paths: invalid create (`BAD_USER_INPUT`), missing id (`NOT_FOUND`), a missing required GraphQL variable (request-level validation error, HTTP 400) - see [GraphQL API](#graphql-api). |
-| `k6-transaction-isolation.js` | Concurrency/lost-update regression test for `updateMessage`'s optimistic locking - see [Concurrency & Transaction Isolation](#concurrency--transaction-isolation). |
+| `k6-retrieve-messages.js` | `GET /messages` (read path), including a paginated `?limit=5` request - see [Pagination](#pagination). |
+| `k6-create-messages.js` | `POST /messages` (write path); creates one shared author in `setup()`. |
+| `k6-message-lifecycle.js` | Full CRUD per iteration: `POST /messages` -> `GET /messages/{id}` -> `PATCH /messages/{id}` -> `DELETE /messages/{id}`. |
+| `k6-invalid-requests.js` | Negative paths: invalid create (400 `BAD_USER_INPUT` + `invalidParams`), unknown id (404 `NOT_FOUND`), malformed id (400), malformed JSON (400) - see [REST API](#rest-api). |
+| `k6-transaction-isolation.js` | Concurrency/lost-update regression test for `PATCH /messages/{id}`'s optimistic locking - see [Concurrency & Transaction Isolation](#concurrency--transaction-isolation). |
 
-Every GraphQL document the scripts send is a *named* operation (`CreateAuthor`, `CreateMessage`,
-`GetMessage`, `UpdateMessage`, `DeleteMessage`, `ListMessages`, `GetCounter`, `IncrementCounter`), so
-load-test traffic is identifiable in traces and logs. Metrics and the Grafana dashboards break
-traffic down by schema root field (`createMessage`, `message`, ...), not by these names.
+Metrics and the Grafana dashboards break traffic down by route template (`POST /messages`,
+`GET /messages/{id}`, ...), and each script tags its requests with a k6 `name` (`CreateMessage`,
+`GetMessageById`, `IncrementCounter`, ...) so k6's own per-request output stays readable.
 
 ### Prerequisites
 
@@ -833,22 +797,20 @@ Every script supports the same environment variables:
 | :--- | :--- | :--- |
 | `VUS` | Number of concurrent virtual users | `10` |
 | `DURATION` | Duration of the test run (e.g. `10s`, `1m`) | `10s` |
-| `BASE_URL` | Target GraphQL endpoint URL | `http://localhost/graphql` |
+| `BASE_URL` | Target base URL (no trailing slash) | `http://localhost` |
 
 **Built-in Thresholds:**
 - `http_req_failed`: error rate must remain below 1% (`rate<0.01`).
 - `http_req_duration`: 95th percentile latency must be under 500ms (`p(95)<500`).
 
-`k6-invalid-requests.js` is the one exception: every request in it *intentionally* triggers a
-GraphQL-level error, and a resolver-thrown error (`BAD_USER_INPUT`, `NOT_FOUND`) still answers HTTP
-200 (only the missing-variable case, a request-level validation error, answers 400 - see [GraphQL
-API](#graphql-api)) - so `http_req_failed` isn't a meaningful signal there. It uses
+`k6-invalid-requests.js` is the one exception: every request in it *intentionally* triggers a 4xx, so
+`http_req_failed` isn't a meaningful signal there. It marks 400/404 as expected per request and uses
 `checks: ['rate>0.99']` instead, which measures what actually matters for that script: did the API
-return the *correct* error shape essentially every time.
+return the *correct* status and problem+json shape essentially every time.
 
-`k6-transaction-isolation.js` also deviates: a `CONFLICT` GraphQL error from a losing optimistic-lock
-race is an *expected*, correct response (still HTTP 200), not a failure - see the next section for
-what it's actually checking.
+`k6-transaction-isolation.js` also deviates: a `409` from a losing optimistic-lock race is an
+*expected*, correct response, not a failure (`http.setResponseCallback(http.expectedStatuses(...))`),
+and it adds a `no_lost_updates` threshold - see the next section for what it's actually checking.
 
 ### Running the Load Tests
 
@@ -869,147 +831,161 @@ VUS=50 DURATION=1m k6 run k6-message-lifecycle.js
 
 #### 4. Custom endpoint / remote target
 ```bash
-k6 run -e BASE_URL=http://localhost:8080/graphql -e VUS=20 -e DURATION=15s k6-invalid-requests.js
+k6 run -e BASE_URL=http://localhost:8080 -e VUS=20 -e DURATION=15s k6-invalid-requests.js
 ```
 
 ## Concurrency & Transaction Isolation
 
 **Isolation-level review.** Nothing in this codebase sets a transaction isolation level anywhere -
-Prisma opens a fresh connection per query against PostgreSQL's unmodified default
+SQLAlchemy runs each request in one transaction against PostgreSQL's unmodified default
 (`READ COMMITTED`). Tuning that level wouldn't have mattered here, though: the real risk isn't
-*which* isolation level applies to each statement, it's that a naive `updateMessage` could run its
-read and its write as two entirely separate, uncoordinated operations - no isolation level closes a
-gap between two unrelated round trips.
+*which* isolation level applies to each statement, it's that a naive update could run its read and
+its write as two entirely separate, uncoordinated operations - no isolation level closes a gap
+between two unrelated round trips.
 
 **The bug this guards against.** A classic lost update: two concurrent callers could both read the
 same row, then both write, with the second write silently overwriting the first's change with no
 error to either caller.
 
-**The fix - optimistic locking via a `version` column.** `Message` has a `version Int @default(0)`
-field (see `prisma/schema.prisma`). Queries include `version`, and the `updateMessage` mutation
-requires the caller to send back the version it read:
+**The fix - optimistic locking via a `version` column.** `Message` has a `version` integer
+(default `0`, see `app/models.py`). Every response carries it, and `PATCH /messages/{id}` requires
+the caller to send back the version it read:
 
-```graphql
-mutation {
-  updateMessage(id: "…", input: { content: "New content", version: 3 }) {
-    id
-    version
-  }
-}
+```bash
+curl -X PATCH http://localhost/messages/<id> -H 'Content-Type: application/json' \
+  -d '{"content": "New content", "version": 3}'
 ```
 
-`updateMessage` (see `src/resolvers.ts`) applies the write conditionally - Prisma's `updateMany({
-where: { id, version }, data: { version: { increment: 1 }, ... } })`, which compiles to `UPDATE
-messages SET ..., version = version + 1 WHERE id = $1 AND version = $2` - using **the version the
-client submitted**, not a version the server re-reads for itself. That distinction matters: guarding
-against a server's own just-read value only protects the few milliseconds between that read and its
-own write; it can't tell whether the *client's* value was stale, and a stale client value is exactly
-what happens on a real read-then-update flow. If the row has moved on since the client's read, 0 rows
-match and the resolver throws a `CONFLICT` GraphQL error telling the caller to refetch and retry -
-instead of silently losing their change.
+`update_message` (see `app/services/messages.py`) applies the write conditionally, in a single
+statement:
+
+```sql
+UPDATE messages SET content = :content, version = version + 1
+WHERE id = :id AND version = :version RETURNING id
+```
+
+using **the version the client submitted**, not a version the server re-reads for itself. That
+distinction matters: guarding against a server's own just-read value only protects the few
+milliseconds between that read and its own write; it can't tell whether the *client's* value was
+stale, and a stale client value is exactly what happens on a real read-then-update flow. If the row
+has moved on since the client's read, no row matches; the service then checks whether the id exists
+(`404` if not) and otherwise answers `409 CONFLICT` telling the caller to refetch and retry - instead
+of silently losing their change.
+
+**Cache correctness under contention.** Reads are cache-aside, and the cache has no TTL. A slow
+reader can load the pre-update row from Postgres and write it into the cache *after* the update's
+eviction, leaving a stale entry that nothing would ever remove - and since clients then keep
+reading the stale version, every one of their updates would `409` forever. So a `409` also evicts the
+entry: the client's version was stale, so the cached copy may be too, and the next read reloads from
+the database.
 
 **Verifying it - `k6-transaction-isolation.js`.** The script has many VUs race to increment a
 counter kept in one message's `content` field: each iteration reads (`content` and `version`) then
-calls `updateMessage` (submits `content + 1` guarded by the `version` it just read). Every success
-must correspond to a real, distinct `+1`; `CONFLICT` errors are expected under contention and are
-reported separately (`write_conflicts`), not counted as failures. Run it and compare the two custom
-metrics in the summary:
+`PATCH`es `content + 1` guarded by the `version` it just read. Every success must correspond to a real,
+distinct `+1`; `409`s are expected under contention and are reported separately
+(`write_conflicts`), not counted as failures. In teardown it checks the invariant that ties the two
+together: starting from `content = "0"` / `version = 0`, each successful write adds exactly 1 to
+both, so they stay equal **if and only if** no write was applied against a stale read. That is the
+`no_lost_updates` threshold, so a lost update fails the run. Run it and compare the custom metrics:
 
 ```bash
 VUS=20 DURATION=15s k6 run k6-transaction-isolation.js
 ```
 
 ```
-successful_increments..........: 213    ...
-final_counter_value.............: avg=212 ...   <- best-effort read; see below
-write_conflicts.................: 28723  ...
+Final state: counter (content) = 420, version = 420.
+no_lost_updates................: 100.00% 1 out of 1
+successful_increments..........: 420     ...
+write_conflicts................: 4195    ...
 ```
 
-`successful_increments` and `final_counter_value` should be equal. `final_counter_value` is read
-back through the app's own `message` query, which goes through the Hazelcast-backed read-through
-cache (see `src/cache.ts`) - immediately after a burst of writes, that cache's own eviction can lag
-the true row by a count or two, so a trailing gap of 1-2 there is a read artifact of the *cache*, not
-a lost update. To see the authoritative value, query Postgres directly:
+`successful_increments`, the final counter and the final version should all be equal. To see the
+authoritative value, query Postgres directly:
 
 ```bash
 kubectl exec -i postgres-0 -- psql -U message_app -d messagedb \
   -c "SELECT content, version FROM messages WHERE title = 'k6-transaction-isolation counter';"
 ```
 
-**Note:** because `updateMessage` now requires `version`, `k6-message-lifecycle.js`'s update step
-sends `version: 0` (correct immediately after its own `createMessage` step, since a freshly created
-message always starts at version 0).
+(The script deletes its counter message in teardown, so query it while the run is in progress if you
+want to see it there.)
+
+**Note:** because `PATCH /messages/{id}` requires `version`, `k6-message-lifecycle.js`'s update step
+sends `version: 0` (correct immediately after its own `POST` step, since a freshly created message
+always starts at version 0).
 
 ## Pagination
 
-The `messages` query returns a `MessagePage { items, totalCount }` rather than the whole table in one
-response - unbounded against a table that's had any real traffic. It accepts two optional arguments:
+`GET /messages` and `GET /authors` return a page `{ "items": [...], "totalCount": n }` rather than the
+whole table in one response - unbounded against a table that's had any real traffic. They accept two
+optional query parameters:
 
-| Argument | Description | Default | Bounds |
+| Parameter | Description | Default | Bounds |
 | :--- | :--- | :--- | :--- |
-| `limit` | Max number of messages to return | `50` | `1`-`200` |
-| `offset` | Number of messages to skip, ordered by `createdAt, id` | `0` | `>= 0` |
+| `limit` | Max number of items to return | `50` | `1`-`200` |
+| `offset` | Number of items to skip | `0` | `>= 0` |
 
-```graphql
-query {
-  messages(limit: 20, offset: 40) {
-    totalCount
-    items { id title content version author { name } }
-  }
-}
+```bash
+curl 'http://localhost/messages?limit=20&offset=40'
 ```
 
 `totalCount` carries the *total* row count, independent of `limit`/`offset`, so a client can compute
-how many pages remain (`ceil(totalCount / limit)`). Out-of-range values (`limit: 0`, `limit: 500`,
-`offset: -1`, etc.) are rejected with a `BAD_USER_INPUT` GraphQL error via the same
-`clampPagination`/`throwIfInvalid` path used by every other resolver-level validation (see
-`src/resolvers.ts`).
+how many pages remain (`ceil(totalCount / limit)`). Out-of-range values (`limit=0`, `limit=500`,
+`offset=-1`, ...) are rejected with `400 BAD_USER_INPUT` rather than silently clamped, through the
+same validation path (and the same problem+json body) as every other request.
 
-The resolver's `orderBy: [{ createdAt: "asc" }, { id: "asc" }]` needs `id` as a tiebreaker so paging
-stays stable even when two rows share the same millisecond-precision `createdAt` - without it, ties
-could reorder across pages and either skip or repeat a row. A matching index, `@@index([createdAt,
-id])` (see `prisma/schema.prisma`), keeps that sort itself from scanning the whole table on every
+Messages are ordered `created_at DESC, id DESC` (newest first); `id` is the tiebreaker so paging
+stays stable even when two rows share the same `created_at` - without it, ties could reorder across
+pages and either skip or repeat a row. A matching index, `ix_messages_created_at_id` on
+`(created_at, id)` (see `app/models.py`), keeps that sort itself from scanning the whole table on every
 request; dropping it turns pagination into a full-table sort per page, which on a large table is the
 difference between double-digit-millisecond and multi-second responses.
 
-Unlike the old REST API, there's no separate "unknown query parameter" check to write:
-GraphQL's schema is typed, so a client that sends a field or argument the schema doesn't declare gets
-a request-level validation error (HTTP 400) automatically, before any resolver runs - see
-[GraphQL API](#graphql-api) below.
+## REST API
 
-## GraphQL API
+The full surface - endpoints, status codes, validation rules, the error model - is in
+[API-DESIGN.md](API-DESIGN.md). In short:
 
-The schema (`src/schema.ts`) is served at `POST /graphql`; Apollo Server's own landing page at that
-same URL in a browser gives you Apollo Sandbox, an in-browser query explorer against the live schema.
-Introspection and Sandbox are one switch, `GRAPHQL_INTROSPECTION`: on by default for local
-`npm run dev`, off by default when `NODE_ENV=production` (which the Dockerfile sets), and turned on
-explicitly for this disposable dev cluster in `k8s/configmap.yaml`. Leave it off anywhere real.
-Sandbox runs its requests from the landing page itself, so it works without any CORS setup. Browsers on
-*other* origins are blocked by default; list the ones that may call the API in
-`CORS_ALLOWED_ORIGINS` (comma-separated exact origins, or `*` to allow everything). curl, k6 and other
-non-browser clients aren't affected by CORS. There's no
-separate spec file to keep in sync by hand, unlike the old REST API's generated OpenAPI document -
-the schema *is* the contract, and it's enforced by the GraphQL executor itself.
+| Method and path | Success | Errors |
+| :--- | :--- | :--- |
+| `GET /messages?limit&offset` | 200 page | 400 |
+| `GET /messages/{id}` | 200 | 400 (bad UUID), 404 |
+| `POST /messages` | 201 + `Location` | 400, 404 (unknown author) |
+| `PATCH /messages/{id}` | 200 (`version` + 1) | 400, 404, **409** (stale version) |
+| `DELETE /messages/{id}` | 204 | 400, 404 |
+| `GET /authors?limit&offset` | 200 page | 400 |
+| `GET /authors/{id}[?include=messages]` | 200 | 400, 404 |
+| `POST /authors` | 201 + `Location` | 400, 409 (duplicate email) |
+| `PATCH /authors/{id}` | 200 | 400, 404, 409 |
+| `DELETE /authors/{id}` | 204 | 400, 404, **409** (author still has messages) |
 
-**Query depth and cost limits.** The schema has cycles (`Issue.project` → `Project.issues` → …), so a
-small query can fan out into a huge number of resolver calls. Each service rejects any operation nested
-deeper than 10 fields (`QUERY_TOO_DEEP`) or priced above 5000 (`QUERY_TOO_COMPLEX`) with **HTTP 400**,
-before a single resolver runs. Cost multiplies through `first`/`limit` and nested lists; see
-[GRAPHQL-API-DESIGN.md](GRAPHQL-API-DESIGN.md) for the model and how the limits were chosen. Every query
-in [EXAMPLES.md](EXAMPLES.md) is comfortably within them. Both codes show up in the
-`graphql_errors_total{error_code=...}` metric.
+**Errors are RFC 9457 `application/problem+json`**, with a stable machine-readable `code`:
 
-**Two different kinds of errors, two different HTTP statuses.** This is a deliberate, spec-mandated
-behavior change from the old REST API's uniform RFC 9457 problem-details responses:
+```json
+{
+  "type": "about:blank",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "The request content was invalid or failed validation constraints.",
+  "code": "BAD_USER_INPUT",
+  "invalidParams": [{ "name": "title", "reason": "title is required and cannot be blank" }]
+}
+```
 
-- A **request error** - the query fails GraphQL parsing/validation before any resolver runs (bad
-  syntax, a missing required variable, an unknown field) - answers **HTTP 400**, no `data` in the
-  body.
-- An **execution error** - a resolver throws (`NOT_FOUND`, `BAD_USER_INPUT`, `CONFLICT`, see
-  `src/errors.ts`) - still answers **HTTP 200**, with the error in the response body's `errors[]`
-  array (`extensions.code` carries the machine-readable reason) and `data` set to `null` for the
-  failed field. This is normal for GraphQL: a single request can partially succeed (some fields
-  resolve, others error), so a single HTTP status can't represent the whole response the way it did
-  for one-endpoint-one-outcome REST calls.
+Validation failures are `400` (FastAPI's default `422` is overridden) and list **every** failing
+field at once. An unhandled exception is a generic `500 INTERNAL_SERVER_ERROR` with no stack trace
+(the details are logged with the trace id). See [`k6-invalid-requests.js`](k6-invalid-requests.js) for
+the client-error cases exercised directly.
 
-See [`k6-invalid-requests.js`](k6-invalid-requests.js) for both cases exercised directly.
+**API docs.** FastAPI generates the OpenAPI 3.1 document from the code, so there's no spec file to keep
+in sync by hand. `/docs` (Swagger UI), `/redoc` and `/openapi.json` are served only when
+`API_DOCS_ENABLED` is exactly `"true"` (any other value but `"false"` fails startup); the dev
+cluster's `k8s/configmap.yaml` turns it on. Leave it off anywhere real.
+
+**CORS.** Browsers on other origins are blocked by default; list the ones that may call the API in
+`CORS_ALLOWED_ORIGINS` (comma-separated exact origins). curl, k6 and other non-browser clients aren't
+affected by CORS.
+
+**Request size.** Bodies over 16 KiB are rejected with `413`; together with the pagination bounds and
+the per-field `max_length` checks (title 100, content 1000, name 50, email 100) that bounds the cost
+of any single request.

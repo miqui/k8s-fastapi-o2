@@ -12,10 +12,10 @@ kubectl usage that I did not run here.
 
 | Thing | Name | Defined in |
 | :--- | :--- | :--- |
-| Application: `default` namespace (Postgres, Hazelcast, both APIs, Ingress, quotas) | `graphql-apollo-prisma-o2` | `k8s/argocd/application.yaml`, syncs `k8s/` |
+| Application: `default` namespace (Postgres, Hazelcast, message-service, Ingress, quotas) | `fastapi-o2` | `k8s/argocd/application.yaml`, syncs `k8s/` |
 | Application: Kyverno policies + PolicyExceptions | `kyverno-policies` | `k8s/argocd/policies-application.yaml`, syncs `k8s/policies/` |
 | Application: observability stack (OTel Collector, Prometheus, Grafana + dashboards, kube-state-metrics, node-exporter, log collector, the namespace) | `observability` | `k8s/argocd/observability-application.yaml`, syncs `k8s/observability/` |
-| Image Updater config | `ImageUpdater/graphql-apollo-prisma-o2` | `k8s/argocd/image-updater.yaml` |
+| Image Updater config | `ImageUpdater/fastapi-o2` | `k8s/argocd/image-updater.yaml` |
 | UI | `http://argocd.localhost/` | `k8s/argocd/ingress.yaml` |
 
 All three Applications track `main` with `automated: {prune: true, selfHeal: true}`. **Not** managed by
@@ -33,21 +33,21 @@ ArgoCD components in the `argocd` namespace: `argocd-server`, `argocd-repo-serve
 kubectl get applications -n argocd                                                       # ✅ sync + health at a glance
 
 # one Application: sync status, health, deployed commit, last operation
-kubectl get application graphql-apollo-prisma-o2 -n argocd \
+kubectl get application fastapi-o2 -n argocd \
   -o jsonpath='{.status.sync.status} {.status.health.status} rev={.status.sync.revision} {.status.operationState.phase}{"\n"}'   # ✅
 
 # per-resource status (spot the OutOfSync / Degraded one)
-kubectl get application graphql-apollo-prisma-o2 -n argocd \
+kubectl get application fastapi-o2 -n argocd \
   -o jsonpath='{range .status.resources[*]}{.kind}/{.name} {.status} {.health.status}{"\n"}{end}'                              # ✅
 
 # errors (ComparisonError, SyncError, ...) - empty output means none
-kubectl get application graphql-apollo-prisma-o2 -n argocd -o jsonpath='{.status.conditions}{"\n"}'                          # ✅
+kubectl get application fastapi-o2 -n argocd -o jsonpath='{.status.conditions}{"\n"}'                          # ✅
 
 # last deployments: id, commit, time
-kubectl get application graphql-apollo-prisma-o2 -n argocd \
+kubectl get application fastapi-o2 -n argocd \
   -o jsonpath='{range .status.history[-3:]}{.id} {.revision} {.deployedAt}{"\n"}{end}'                                        # ✅
 
-kubectl describe application graphql-apollo-prisma-o2 -n argocd                          # everything above plus events
+kubectl describe application fastapi-o2 -n argocd                          # everything above plus events
 ```
 
 Compare the deployed commit with `main`: `git rev-parse origin/main` vs `.status.sync.revision`. A
@@ -69,7 +69,7 @@ kubectl annotate application kyverno-policies -n argocd argocd.argoproj.io/refre
 kubectl annotate application kyverno-policies -n argocd argocd.argoproj.io/refresh=hard --overwrite
 
 # Trigger a sync operation (what the UI's "Sync" button does)
-kubectl patch application graphql-apollo-prisma-o2 -n argocd --type merge \
+kubectl patch application fastapi-o2 -n argocd --type merge \
   -p '{"operation":{"sync":{"prune":true}}}'
 ```
 
@@ -84,7 +84,7 @@ commit is made**.
 
 ```bash
 # the tag each service is currently pinned to (the override lives on the Application, not in git)
-kubectl get application graphql-apollo-prisma-o2 -n argocd \
+kubectl get application fastapi-o2 -n argocd \
   -o jsonpath='{.spec.source.kustomize.images}{"\n"}'                                     # ✅
 
 kubectl get imageupdater -n argocd                                                        # ✅ READY, LAST CHECKED
@@ -92,11 +92,11 @@ kubectl logs -n argocd deploy/argocd-image-updater-controller --tail=20         
 kubectl logs -n argocd deploy/argocd-image-updater-controller | grep 'images_updated'     # ✅ per-cycle summary
 ```
 
-A healthy idle cycle logs `images_considered=2 images_skipped=0 images_updated=0 errors=0`. To
+A healthy idle cycle logs `images_considered=1 images_skipped=0 images_updated=0 errors=0`. To
 confirm a rollout picked up a build, compare the tag above with the pods':
 
 ```bash
-kubectl get pods -n default -l 'app in (message-service,issue-service)' \
+kubectl get pods -n default -l app=message-service \
   -o jsonpath='{range .items[*]}{.metadata.name} {.spec.containers[0].image}{"\n"}{end}'  # ✅
 ```
 
@@ -111,11 +111,11 @@ auto-sync first — and remember to restore it.
 
 ```bash
 # pause: remove the automated block (manual sync still works)
-kubectl patch application graphql-apollo-prisma-o2 -n argocd --type json \
+kubectl patch application fastapi-o2 -n argocd --type json \
   -p '[{"op":"remove","path":"/spec/syncPolicy/automated"}]'
 
 # restore
-kubectl patch application graphql-apollo-prisma-o2 -n argocd --type merge \
+kubectl patch application fastapi-o2 -n argocd --type merge \
   -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
 ```
 
@@ -229,9 +229,9 @@ Not installed here, and none of the commands below were run. `argocd-server` is 
 argocd login argocd.localhost --plaintext --grpc-web --username admin
 
 argocd app list
-argocd app get graphql-apollo-prisma-o2
-argocd app diff graphql-apollo-prisma-o2          # live vs git
-argocd app sync graphql-apollo-prisma-o2
-argocd app history graphql-apollo-prisma-o2
-argocd app set graphql-apollo-prisma-o2 --sync-policy none      # pause auto-sync
+argocd app get fastapi-o2
+argocd app diff fastapi-o2          # live vs git
+argocd app sync fastapi-o2
+argocd app history fastapi-o2
+argocd app set fastapi-o2 --sync-policy none      # pause auto-sync
 ```

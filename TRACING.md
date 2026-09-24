@@ -1,58 +1,58 @@
-# Tracing — message-service & issue-service → OpenObserve
+# Tracing — message-service → OpenObserve
 
-Distributed tracing for both GraphQL APIs, exported over OTLP to the OTel Collector and from there
-to OpenObserve. Traces sit alongside the metrics that already flow through the same collector
-(see `PROMETHEUS.md`).
+Distributed tracing for the REST API, exported over OTLP to the OTel Collector and from there to
+OpenObserve. Traces sit alongside the metrics that already flow through the same collector (see
+`PROMETHEUS.md`).
 
 ```
-message-service ─┐  OTLP/HTTP            OTLP/HTTP + basic auth
-                 ├─► otel-collector:4318 ─────────────────────► OpenObserve (org "default")
-issue-service  ──┘   /v1/traces           /api/default/v1/traces
+message-service ──► otel-collector:4318 ─────────────────────► OpenObserve (org "default")
+  OTLP/HTTP          /v1/traces           OTLP/HTTP + basic auth
+                                          /api/default/v1/traces
 ```
 
 ## What is traced
 
 | Layer | Instrumentation | Spans |
 | :--- | :--- | :--- |
-| HTTP server | `@opentelemetry/instrumentation-http` | One span per request. `/health/*` (kubelet probes) is ignored. |
-| GraphQL | `@opentelemetry/instrumentation-graphql` | One span per operation (named after it), with parse / validate / execute below it. |
-| Database | `@prisma/instrumentation` | `prisma:client:operation` and `prisma:engine:*` spans — the DB side of each request. |
-| Cache (message-service only) | manual spans in `src/cache.ts` | `hazelcast.get` / `hazelcast.set` / `hazelcast.delete`, each with `db.system=hazelcast`, `db.operation` and `cache.map`; `get` also sets `cache.hit` (true/false). |
+| HTTP server | `opentelemetry-instrumentation-fastapi` | One server span per request, named `<METHOD> <route template>` (e.g. `PATCH /messages/{id}`) with `http.status_code`. `/health/liveness` and `/health/readiness` (kubelet probes) are excluded. W3C `traceparent` is propagated. |
+| Database | `opentelemetry-instrumentation-sqlalchemy` (on the async engine's sync engine) | One span per SQL statement (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, with `db.statement`), plus a `connect` span per connection checkout from the pool. |
+| Cache | manual spans in `app/cache.py` | `hazelcast.get` / `hazelcast.set` / `hazelcast.delete`, each with `db.system=hazelcast`, `db.operation` and `cache.map`; `get` also sets `cache.hit` (true/false). |
 
-The Hazelcast client has no OpenTelemetry instrumentation, hence the hand-written `traced()` wrapper
-in `src/cache.ts`. It matters for the `message(id)` query, a cache-aside read: on a hit the trace
-has no `prisma:*` spans at all, and without a `hazelcast.get` span the hop to the (separate)
-Hazelcast pod is an unexplained gap inside the resolver span. issue-service has no cache.
+The Hazelcast client has no OpenTelemetry instrumentation, hence the hand-written `_traced()` wrapper
+in `app/cache.py`. It matters for `GET /messages/{id}`, a cache-aside read: on a hit the trace has no
+SQL spans at all, and without a `hazelcast.get` span the hop to the (separate) Hazelcast pod is an
+unexplained gap inside the request span.
 
-The two services never call each other, so there is no cross-service trace — each API produces its
-own traces.
+A `connect` span is the instrumentor wrapping `Engine.connect()`, i.e. checking a connection out of
+the pool - it is not a new TCP connection to Postgres, and lasts a fraction of a millisecond.
+
+The service calls nothing else over HTTP, so there is no cross-service trace.
 
 ## Code
 
-Both services have an identical `src/tracing.ts` (`service.name` differs):
+`app/tracing.py`, called from `create_app()` in `app/main.py`. Decisions worth knowing before
+changing it:
 
-- `src/tracing.ts` — message-service
-- `issue-service/src/tracing.ts` — issue-service
-
-Decisions worth knowing before changing them:
-
-- **It must be the first import in `index.ts`** (after `./env`, before `node:http`, express,
-  graphql and `@prisma/client`). Instrumentations patch modules when they are first required, so
-  anything loaded earlier goes untraced, silently.
-- **No express instrumentation.** With `/health/*` ignored at the HTTP layer, express would still
-  create root spans for those requests plus a span per middleware layer. The HTTP span plus the
-  GraphQL operation span carry everything useful (every request is `POST /graphql`).
-- **`ignoreTrivialResolveSpans` + `mergeItems`** on the GraphQL instrumentation — without them every
-  field of every list result becomes its own span.
+- **It runs at app creation, not in the lifespan.** `FastAPIInstrumentor.instrument_app()` adds
+  middleware, which Starlette refuses once the app has started.
+- **`exclude_spans=["receive", "send"]`.** Without it every request gets `http send` / `http receive`
+  child spans, which multiply the span count without adding information.
+- **The instrumentors get a no-op `MeterProvider`.** Left alone they publish their own
+  `http_server_*` and `db_client_connections_*` metrics through the global provider, duplicating the
+  ones in `app/telemetry.py` - labelled with the pod IP and the client-controlled `Host` header
+  (`http_host`, `http_server_name`), which would let a caller mint Prometheus series at will. Spans
+  are unaffected.
 - **Resource attributes** mirror the metrics: `service.name` and `k8s.pod.name` (from the
   `POD_NAME` Downward API env var).
-- **The exporter URL is used verbatim.** `OTEL_TRACES_URL` must include `/v1/traces`; the SDK does
-  not append it when a `url` is passed explicitly.
-- `shutdownTracing()` runs in the SIGTERM handler so the last batch of spans is flushed.
+- **The exporter URL is used verbatim.** `OTEL_TRACES_URL` must include `/v1/traces`; the exporter
+  does not append it when an endpoint is passed explicitly.
+- **Bounded shutdown.** The exporter timeout is 5s, and `shutdown_tracing()` runs in the lifespan
+  shutdown so the last batch of spans is flushed - without letting an unreachable collector hold the
+  pod past `terminationGracePeriodSeconds`.
 
 ## Configuration
 
-`k8s/configmap.yaml`, for both `message-service-config` and `issue-service-config`:
+`k8s/configmap.yaml`, `message-service-config`:
 
 | Variable | Value | Purpose |
 | :--- | :--- | :--- |
@@ -60,11 +60,11 @@ Decisions worth knowing before changing them:
 | `OTEL_TRACES_SAMPLER` | `parentbased_traceidratio` | Sample by ratio; children follow the parent's decision |
 | `OTEL_TRACES_SAMPLER_ARG` | `"0.1"` | 10% of new traces |
 
-The sampler uses the SDK's standard env vars, so no code reads them — the ratio can be changed by
-editing the ConfigMap and restarting the pods. 10% is deliberate: a k6 run against a 5Gi PVC with
-3-day retention (see `k8s/observability/openobserve-values.yaml`) would otherwise fill it quickly.
-Set `"1.0"` temporarily when debugging, and expect to need a burst of ~50+ requests to see anything
-at 0.1.
+The sampler uses the SDK's standard env vars, which the Python SDK reads natively, so no code parses
+them - the ratio can be changed by editing the ConfigMap and restarting the pods. 10% is deliberate:
+a k6 run against a 5Gi PVC with 3-day retention (see `k8s/observability/openobserve-values.yaml`)
+would otherwise fill it quickly. Set `"1.0"` temporarily when debugging, and expect to need a burst
+of ~50+ requests to see anything at 0.1.
 
 ## Collector
 
@@ -117,40 +117,35 @@ curl -X POST localhost:14318/v1/traces -H 'Content-Type: application/json' -d '{
   "startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000050000000"}]}]}]}'
 ```
 
-**Services → OpenObserve (verified live, 2026-09-21).** After the rollout (all six pods on the
-`…-63b83d8` image tag, 0 restarts), 150 read-only GraphQL queries were sent to each service via
-`kubectl port-forward` (`TraceCheckMessages` / `TraceCheckIssue`). Results:
+**Service → OpenObserve (verified live, 2026-09-23).** On a fresh kind cluster running the real
+image (3 to 6 replicas, `OTEL_TRACES_SAMPLER_ARG: "0.1"`), after running all five k6 scripts:
 
-- **Both services arrived:** 441 spans / 19 traces for `message-service`, 252 spans / 14 traces for
-  `issue-service`.
-- **Sampling matched the config:** 16 and 14 of 150 requests were sampled (~10% at
-  `OTEL_TRACES_SAMPLER_ARG: "0.1"`).
+- **The service arrived:** 14,365 spans for `service_name = message-service`.
+- **Span names are bounded:** `GET /messages/{id}`, `PATCH /messages/{id}`, `POST /messages`,
+  `DELETE /messages/{id}`, `GET /messages` (route templates, never raw paths), plus `SELECT` /
+  `INSERT` / `UPDATE` / `DELETE` / `connect` and `hazelcast.get` / `hazelcast.set` /
+  `hazelcast.delete`.
 - **Health probes are excluded:** 0 spans with `health` in the operation name, despite kubelet
   probing every few seconds.
-- **Spans nest as intended** — HTTP → GraphQL operation → resolver → Prisma:
+- **Spans nest as intended.** A `PATCH /messages/{id}` trace:
 
   ```
-  - POST
-    - query TraceCheckMessages
-      - graphql.resolve authors
-        - prisma:client:operation
-          - prisma:engine:query → connection, db_query, serialize, response_json_serialization
-        - graphql.resolve authors.*.id
-      - graphql.resolve messages
-        - prisma:client:operation …
+  - PATCH /messages/{id}          2757us  status 200
+    - connect                      317us
+    - UPDATE                       229us  UPDATE messages SET title=$1::VARCHAR, content=$2::VARCHAR, version=(messages.version + $3) ...
+    - SELECT                       132us  SELECT messages.id, messages.title, ...
+    - hazelcast.delete             351us
   ```
 
-  `mergeItems` is working (`authors.*.id` is one span, not one per author).
-- **Quirk:** when a query resolves two Prisma operations concurrently (issue-service's
-  `workspace` + `issue`), the `prisma:engine:*` spans can be attached under a sibling operation
-  rather than the one that issued them. The span counts and durations are still right; only the
-  parent link is off.
+- **`cache.hit` is recorded on `hazelcast.get`:** `false` on 828 spans and `true` on 314 in that run,
+  so cache-aside behaviour is visible in the trace.
+- **No duplicate metrics:** the new pods exported none of the `http_server_*` /
+  `db_client_connections_usage` series (see the no-op `MeterProvider` above).
 
 To repeat the check:
 
 ```bash
-# pods should be newer than the merge
-kubectl get pods -n default -l 'app in (message-service,issue-service)'
+kubectl get pods -n default -l app=message-service
 
 # generate traffic (10% sampling), e.g. one of the k6 scripts, then:
 U=$(kubectl get secret openobserve -n observability -o jsonpath='{.data.ZO_ROOT_USER_EMAIL}' | base64 -d)
@@ -159,29 +154,22 @@ kubectl port-forward -n observability svc/openobserve 15080:5080 &
 END=$(python3 -c "import time;print(int(time.time()*1e6))"); START=$((END-3600000000))
 curl -s -u "$U:$P" -X POST "http://localhost:15080/api/default/_search?type=traces" \
   -H 'Content-Type: application/json' \
-  -d "{\"query\":{\"sql\":\"select service_name, count(*) as n from \\\"default\\\" group by service_name\",\"start_time\":$START,\"end_time\":$END,\"from\":0,\"size\":20}}"
+  -d "{\"query\":{\"sql\":\"select operation_name, count(*) as n from \\\"default\\\" where service_name = 'message-service' group by operation_name order by n desc\",\"start_time\":$START,\"end_time\":$END,\"from\":0,\"size\":30}}"
 ```
 
-Expect rows for `message-service` and `issue-service`. Or open OpenObserve → Traces
-(`openobserve.localhost`).
+Expect rows for the route-templated request spans and the SQL / `hazelcast.*` spans. Or open
+OpenObserve → Traces (`openobserve.localhost`).
 
 ## Gotchas
 
 - **Stream stats lag.** `GET /api/default/streams?type=traces` reports `doc_num: 0` for the
   `default` stream even when spans are searchable (they are still in the in-memory table). Search
   instead of trusting the stat.
-- **ArgoCD `selfHeal` reverts hand edits** to `k8s/configmap.yaml` and the deployments, and the
-  service images come from Docker Hub via Image Updater. To test a tracing change on the cluster it
+- **ArgoCD `selfHeal` reverts hand edits** to `k8s/configmap.yaml` and the deployment, and the
+  service image comes from Docker Hub via Image Updater. To test a tracing change on the cluster it
   has to be merged, or auto-sync paused.
 - **Nothing shows up?** In order: pods still on the old image; sampler ratio too low for the
   amount of traffic; `OTEL_TRACES_URL` missing `/v1/traces`; collector log for export errors
   (`kubectl logs -n observability deploy/otel-collector`).
-- **Logs** are not covered here. OpenObserve currently holds only metrics and (now) traces; no pod
-  log shipper is deployed.
-
-## Dependencies added (both services)
-
-`@opentelemetry/sdk-trace-node`, `@opentelemetry/exporter-trace-otlp-http`,
-`@opentelemetry/instrumentation`, `@opentelemetry/instrumentation-http`,
-`@opentelemetry/instrumentation-graphql`, `@prisma/instrumentation` (pinned to the same 6.19 line as
-`@prisma/client`; tracing is GA in Prisma 6, no preview feature needed).
+- **Logs** are not covered here - see `LOGS.md`. The app writes one JSON object per line to stdout,
+  with `trace_id` / `span_id` when a span is active, so a log line can be matched to its trace.

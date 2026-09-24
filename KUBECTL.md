@@ -1,6 +1,6 @@
 # kubectl Commands — OpenObserve Observability Rollout
 
-`kubectl` commands used while adding OpenObserve observability for the message GraphQL API,
+`kubectl` commands used while adding OpenObserve observability for the message REST API,
 grouped by phase.
 
 ## From `deploy-kind.sh` (the automated deployment)
@@ -29,7 +29,7 @@ kubectl get pods -n observability -o wide
 ## Manual investigation (diagnosing why ingress-nginx wasn't ready)
 
 ```bash
-kubectl config use-context kind-kind-graphql-prisma-cluster
+kubectl config use-context kind-kind-fastapi-cluster
 kubectl get nodes -o wide
 kubectl get pods -n ingress-nginx -o wide
 kubectl describe pod -n ingress-nginx -l app.kubernetes.io/component=controller
@@ -69,7 +69,7 @@ kubectl exec -n observability openobserve-0 -- du -sh /data/*
 ## Applying the fix (scoped `write_relabel_configs`) and recovering
 
 ```bash
-kubectl apply -k /Users/miqui/development/k8s-graphql-apollo-prisma-o2/k8s/observability/
+kubectl apply -k /Users/miqui/development/k8s-fastapi-o2/k8s/observability/
 kubectl rollout restart deployment/prometheus -n observability
 kubectl rollout status deployment/prometheus -n observability --timeout=90s
 kubectl delete pod -n observability openobserve-0

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
-CLUSTER_NAME="kind-graphql-prisma-cluster"
+CLUSTER_NAME="kind-fastapi-cluster"
 
 echo "=========================================================="
-echo " GraphQL (Apollo Server) + Prisma + PostgreSQL - Kind Deploy"
+echo " FastAPI + SQLAlchemy + PostgreSQL - Kind Deploy"
 echo "=========================================================="
 
 # 1. Check prerequisites
@@ -34,6 +34,22 @@ if [ "${#MISSING_SECRET_VARS[@]}" -gt 0 ]; then
   exit 1
 fi
 echo "=> 1Password CLI is signed in and all required secrets are present."
+
+# 1b. Check that the Git repository the ArgoCD Applications track is reachable. ArgoCD clones it
+#     anonymously, so if it doesn't exist (or is private) every Application sits at sync status
+#     "Unknown" ("authentication required: Repository not found") and the first-sync waits below
+#     time out ~10 minutes into the script. Fail here instead, before creating the cluster.
+for app_file in k8s/argocd/application.yaml k8s/argocd/observability-application.yaml k8s/argocd/policies-application.yaml; do
+  APP_REPO_URL="$(awk '/repoURL:/ {print $2; exit}' "${app_file}")"
+  APP_REVISION="$(awk '/targetRevision:/ {print $2; exit}' "${app_file}")"
+  echo "=> Checking ${APP_REPO_URL} (${APP_REVISION}) is readable by ArgoCD..."
+  if ! GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code "${APP_REPO_URL}" "refs/heads/${APP_REVISION}" >/dev/null 2>&1; then
+    echo "Error: ${app_file} tracks ${APP_REPO_URL} @ ${APP_REVISION}, but that repository/branch"
+    echo "       isn't anonymously readable. Create it as a public repo and push these manifests to"
+    echo "       '${APP_REVISION}' (or point repoURL at a repo that exists), then re-run."
+    exit 1
+  fi
+done
 
 # 2. Check / Create Kind cluster (1 control-plane, 2 API workers, 1 DB worker,
 #    1 observability worker, 1 cache worker, 1 OpenObserve worker)
@@ -68,7 +84,7 @@ kubectl wait --namespace kube-system \
   --for=condition=available deployment/metrics-server \
   --timeout=120s
 
-# 4. Install ArgoCD (message-service/issue-service images now come from Docker Hub, built and
+# 4. Install ArgoCD (the message-service image now comes from Docker Hub, built and
 #    pushed by GitHub Actions on push to main - see .github/workflows/ - rather than being built
 #    and `kind load`-ed locally).
 echo "=> Installing ArgoCD..."
@@ -217,7 +233,7 @@ kubectl wait --namespace argocd \
   --timeout=180s
 
 # 6. Register the ArgoCD Application that owns k8s/ (Postgres, Hazelcast, message-service,
-#    issue-service, Ingress, ResourceQuota - everything k8s/kustomization.yaml produces).
+#    Ingress, ResourceQuota - everything k8s/kustomization.yaml produces).
 #    ArgoCD's own sync now does what `kubectl apply -k k8s/` used to do directly, and keeps
 #    reapplying it (selfHeal) - see k8s/argocd/application.yaml for the postgres-credentials
 #    ignoreDifferences caveat that makes that safe alongside step 6a below.
@@ -226,7 +242,7 @@ kubectl apply -f k8s/argocd/application.yaml
 kubectl apply -f k8s/argocd/image-updater.yaml
 echo "=> Waiting for the ArgoCD Application's first sync..."
 kubectl wait --namespace argocd \
-  --for=jsonpath='{.status.sync.status}'=Synced application/graphql-apollo-prisma-o2 \
+  --for=jsonpath='{.status.sync.status}'=Synced application/fastapi-o2 \
   --timeout=180s
 
 # 6a. Inject database secrets from environment (via op run) - real values, overwriting the
@@ -257,7 +273,6 @@ kubectl rollout status deployment/headlamp -n headlamp --timeout=120s
 # 10. Wait for API rollouts
 echo "=> Waiting for Deployments to be ready..."
 kubectl rollout status deployment/message-service --timeout=180s
-kubectl rollout status deployment/issue-service --timeout=180s
 
 # 11. Cluster & Pod overview
 echo ""
@@ -276,12 +291,6 @@ echo ""
 echo "==================== Application Service ================"
 kubectl get svc message-service
 echo ""
-echo "==================== Issue Service Pods =================="
-kubectl get pods -l app=issue-service -o wide
-echo ""
-echo "==================== Issue Service ======================="
-kubectl get svc issue-service
-echo ""
 echo "==================== Observability Pods ================="
 kubectl get pods -n observability -o wide
 echo ""
@@ -290,10 +299,8 @@ kubectl get pods -n headlamp -o wide
 
 echo ""
 echo "=========================================================="
-echo " message-service GraphQL:  http://localhost/graphql"
+echo " message-service REST API: http://localhost/messages (docs: http://localhost/docs)"
 echo " message-service health:   http://localhost/health/liveness"
-echo " issue-service GraphQL:    http://localhost/issues/graphql"
-echo " issue-service health:     http://localhost/issues/health/liveness"
 echo " Grafana:                  http://grafana.localhost/ (credentials from 1Password / Secret)"
 echo " OpenObserve:              http://openobserve.localhost/ (credentials from 1Password / Secret)"
 echo " Headlamp:                 http://headlamp.localhost/ (login token: kubectl create token headlamp -n headlamp --duration=24h)"

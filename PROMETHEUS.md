@@ -25,10 +25,10 @@ becomes its own OpenObserve stream, and forwarding every job — in particular
 than OpenObserve's single-node in-memory MemTable (`config.ZO_MEM_TABLE_MAX_SIZE`, `"0"` = auto-sized,
 in `k8s/observability/openobserve-values.yaml`) could hold.
 
-## 2. Scoped remote_write to just the GraphQL API's own metrics
+## 2. Scoped remote_write to just the API's own metrics
 
 Added `write_relabel_configs` to keep only the `otel-collector` job (the message-service's own
-Node.js/GraphQL/Prisma metrics, pushed via OTLP — see `src/telemetry.ts`) before it reaches
+FastAPI/SQLAlchemy metrics, pushed via OTLP — see `app/telemetry.py`) before it reaches
 OpenObserve:
 
 ```yaml

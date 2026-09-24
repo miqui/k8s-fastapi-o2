@@ -8,11 +8,12 @@ kubeconfig.yml
 ### Claude Code ###
 .claude/
 
-### Node / TypeScript ###
-node_modules/
-dist/
-npm-debug.log*
-*.tsbuildinfo
+### Python ###
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
 
 ### IntelliJ IDEA ###
 .idea

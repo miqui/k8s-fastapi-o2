@@ -11,60 +11,37 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost/graphql';
-const jsonHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
-
-const MESSAGES_QUERY = `
-  query ListMessages($limit: Int, $offset: Int) {
-    messages(limit: $limit, offset: $offset) {
-      totalCount
-      items { id title content version author { id name } }
-    }
-  }
-`;
+const BASE_URL = __ENV.BASE_URL || 'http://localhost';
 
 export default function () {
-  const res = http.post(BASE_URL, JSON.stringify({
-    query: MESSAGES_QUERY,
-    variables: { limit: 50, offset: 0 },
-  }), { headers: jsonHeaders, tags: { name: 'GetAllMessages' } });
+  const res = http.get(`${BASE_URL}/messages?limit=50`, { tags: { name: 'GetAllMessages' } });
 
   check(res, {
     'status is 200': (r) => r.status === 200,
-    'no errors': (r) => {
-      try {
-        return !r.json().errors;
-      } catch (e) {
-        return false;
-      }
-    },
     'has at least one item': (r) => {
       try {
-        return r.json().data.messages.items.length > 0;
+        return r.json().items.length > 0;
       } catch (e) {
         return false;
       }
     },
     'has totalCount': (r) => {
       try {
-        return typeof r.json().data.messages.totalCount === 'number';
+        return typeof r.json().totalCount === 'number';
       } catch (e) {
         return false;
       }
     },
   });
 
-  // Paginate with limit/offset (see the `messages` resolver in src/resolvers.ts): limit is
-  // capped at 200 server-side, so a small page should come back exactly that size (never more).
-  const pageRes = http.post(BASE_URL, JSON.stringify({
-    query: MESSAGES_QUERY,
-    variables: { limit: 5, offset: 0 },
-  }), { headers: jsonHeaders, tags: { name: 'GetMessagesPage' } });
+  // Paginate with limit/offset (see GET /messages in app/routers/messages.py): a small page
+  // should come back at most that size (limit is bounded to 1-200 server-side).
+  const pageRes = http.get(`${BASE_URL}/messages?limit=5`, { tags: { name: 'GetMessagesPage' } });
   check(pageRes, {
     'page: status is 200': (r) => r.status === 200,
     'page: at most 5 items': (r) => {
       try {
-        return r.json().data.messages.items.length <= 5;
+        return r.json().items.length <= 5;
       } catch (e) {
         return false;
       }

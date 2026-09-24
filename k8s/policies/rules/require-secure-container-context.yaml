@@ -25,7 +25,7 @@ spec:
       expression: "object.spec.containers + object.spec.?initContainers.orValue([])"
   validations:
     # Note for the securityContext work: runAsNonRoot is only verifiable by the kubelet when the
-    # image's USER is numeric (or runAsUser is set), so images with `USER node` need runAsUser.
+    # image's USER is numeric (or runAsUser is set), so images whose USER is a name (not a uid) need runAsUser.
     - expression: >-
         variables.containers.all(c,
           c.?securityContext.?runAsNonRoot.orValue(

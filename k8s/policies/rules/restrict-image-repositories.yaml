@@ -31,7 +31,6 @@ spec:
       expression: >-
         [
           'docker.io/miqui/message-service',
-          'docker.io/miqui/issue-service',
           'docker.io/library/postgres',
           'docker.io/library/busybox',
           'docker.io/library/nginx',

@@ -1,6 +1,6 @@
 # Pod logs → OpenObserve
 
-Container logs from the `default` namespace (message-service, issue-service, postgres, hazelcast)
+Container logs from the `default` namespace (message-service, postgres, hazelcast)
 are tailed off the nodes by an OTel Collector DaemonSet and shipped to OpenObserve. Metrics
 (`PROMETHEUS.md`) and traces (`TRACING.md`) already go there; this adds the third signal.
 
@@ -65,12 +65,34 @@ from those two audit rules, like `node-exporter.yaml` does; the rest of its `sec
 (no privilege escalation, drop ALL, RuntimeDefault seccomp, read-only root filesystem, read-only
 mount) is still set. The exception is synced by ArgoCD from `main`.
 
-## Verification (live, 2026-09-21)
+## Application log format
 
-`kubectl exec` wrote marker lines to PID 1's stdout in one message-service and one issue-service pod
-(`echo … > /proc/1/fd/1`). All 6 arrived in `pod_logs` with the right labels, and a query for
-`k8s_namespace_name <> 'default'` returned 0 rows. Only these markers were checked — the services
-are quiet after startup, so there was no organic traffic in the stream to inspect.
+message-service writes **one JSON object per line to stdout** (`app/logging.py`; uvicorn's and
+Alembic's own logging is routed through the same formatter), so the CRI line the collector ships is
+`<time> stdout F {"message": ..., "timestamp": ..., "level": ..., "logger": ..., ...}`. Fields:
+
+| Field | Notes |
+| :--- | :--- |
+| `timestamp` | ISO-8601 UTC, millisecond precision |
+| `level` | `INFO`, `WARNING`, `ERROR`, ... |
+| `message` | The log message |
+| `logger` | The Python logger name (`app.main`, `app.access`, `uvicorn.error`, `alembic.runtime.migration`, ...) |
+| `trace_id`, `span_id` | Present when a span is active - copy `trace_id` into OpenObserve's Traces view to jump from a log line to its trace |
+| extras | e.g. `method`, `route`, `status_code`, `duration_ms` on the per-request `app.access` line |
+
+`app.access` logs one line per request, with the route *template*; `/health/*` probes are not
+logged (uvicorn's own access log is off). An unhandled exception is logged with its stack trace
+(and the active `trace_id`), while the client only ever gets a generic 500. Request bodies and
+credentials are never logged.
+
+## Verification (live, 2026-09-23)
+
+On a fresh kind cluster running the real image, after running the k6 scripts: `pod_logs` held
+32,471 rows from message-service pods, of which 32,053 carried a `trace_id` in their JSON `body`,
+and the startup line (`{"message": "message-service started", "api_docs_enabled": true, ...,
+"logger": "app.main"}`) was searchable. Earlier (2026-09-21), marker lines written with
+`kubectl exec … > /proc/1/fd/1` had been verified to arrive with the right pod/namespace labels, with
+0 rows returned for `k8s_namespace_name <> 'default'`.
 
 To repeat it:
 

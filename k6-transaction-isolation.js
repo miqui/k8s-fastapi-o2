@@ -1,88 +1,83 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import { Counter, Trend } from 'k6/metrics';
+import { Counter, Rate, Trend } from 'k6/metrics';
 
-// Proves updateMessage()'s optimistic locking (src/resolvers.ts) actually closes the
-// lost-update gap for real GraphQL clients: many VUs race to increment a counter stored in
-// one message's `content` field, each doing its own read (content + version) then an
-// updateMessage mutation (submits content+1 guarded by the version it read). The server
-// rejects an update with a CONFLICT GraphQL error whenever the row changed since that version
-// was read - so out of N attempts, some legitimately lose the race and get CONFLICT (expected,
-// not a bug), but every success must correspond to a real, distinct +1. If the app used a
-// server-side-only CAS (re-reading its own "current" version right before writing, instead of
-// trusting the version the client actually read), this test still fails: the DB's final
-// content ends up lower than the count of "successful" updates, because those updates blindly
-// overwrote content computed from stale reads even though the row hadn't changed *between the
-// server's own read and write*, only since the client's much earlier read.
+// Proves PATCH /messages/{id}'s optimistic locking (update_message in
+// app/services/messages.py) actually closes the lost-update gap for real HTTP clients: many VUs
+// race to increment a counter stored in one message's `content` field, each doing its own read
+// (content + version) then a PATCH that submits content+1 guarded by the version it read. The
+// server answers 409 whenever the row changed since that version was read - so out of N
+// attempts, some legitimately lose the race and get 409 (expected, not a bug), but every success
+// must correspond to a real, distinct +1.
+//
+// The invariant checked in teardown: every successful PATCH bumps `version` by exactly 1 and
+// sets content = (content it read) + 1. Starting from content "0" / version 0, the two therefore
+// stay equal if and only if no write was applied against a stale read. Under a server-side-only
+// CAS (re-reading its own "current" version right before writing instead of trusting the version
+// the client read) they diverge: the DB's version outruns the counter.
 export const options = {
   vus: __ENV.VUS ? parseInt(__ENV.VUS, 10) : 20,
   duration: __ENV.DURATION || '15s',
   thresholds: {
+    // 409 is an expected outcome (see setResponseCallback below), so it isn't a failure.
     http_req_failed: ['rate<0.01'],
+    // Teardown: final content == final version. Any lost update fails the run.
+    no_lost_updates: ['rate==1'],
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost/graphql';
-const jsonHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+// 200-299 and 409 are expected here; anything else (5xx, 404, 400) counts as failed.
+http.setResponseCallback(http.expectedStatuses({ min: 200, max: 299 }, 409));
 
-const CREATE_AUTHOR_MUTATION = `mutation CreateAuthor($input: CreateAuthorInput!) { createAuthor(input: $input) { id } }`;
-const CREATE_MESSAGE_MUTATION = `
-  mutation CreateMessage($input: CreateMessageInput!) { createMessage(input: $input) { id } }
-`;
-const GET_COUNTER_QUERY = `query GetCounter($id: ID!) { message(id: $id) { content version } }`;
-const INCREMENT_MUTATION = `
-  mutation IncrementCounter($id: ID!, $input: UpdateMessageInput!) { updateMessage(id: $id, input: $input) { id version content } }
-`;
-const DELETE_MESSAGE_MUTATION = `mutation DeleteMessage($id: ID!) { deleteMessage(id: $id) }`;
+const BASE_URL = __ENV.BASE_URL || 'http://localhost';
+const jsonHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
 
 const successfulIncrements = new Counter('successful_increments');
 const writeConflicts = new Counter('write_conflicts');
 const finalCounterValue = new Trend('final_counter_value');
+const noLostUpdates = new Rate('no_lost_updates');
 
 export function setup() {
-  const authorRes = http.post(BASE_URL, JSON.stringify({
-    query: CREATE_AUTHOR_MUTATION,
-    variables: { input: { name: 'k6-isolation-test', email: `k6-isolation-test-${Date.now()}@example.com` } },
+  const authorRes = http.post(`${BASE_URL}/authors`, JSON.stringify({
+    name: 'k6-isolation-test',
+    email: `k6-isolation-test-${Date.now()}@example.com`,
   }), { headers: jsonHeaders });
-  if (authorRes.status !== 200 || authorRes.json().errors) {
+  if (authorRes.status !== 201) {
     throw new Error(`setup: failed to create author, status ${authorRes.status}, body ${authorRes.body}`);
   }
-  const authorId = authorRes.json().data.createAuthor.id;
+  const authorId = authorRes.json().id;
 
-  const createRes = http.post(BASE_URL, JSON.stringify({
-    query: CREATE_MESSAGE_MUTATION,
-    variables: { input: { title: 'k6-transaction-isolation counter', content: '0', authorId } },
+  const createRes = http.post(`${BASE_URL}/messages`, JSON.stringify({
+    title: 'k6-transaction-isolation counter',
+    content: '0',
+    authorId,
   }), { headers: jsonHeaders });
-  if (createRes.status !== 200 || createRes.json().errors) {
+  if (createRes.status !== 201) {
     throw new Error(`setup: failed to create counter message, status ${createRes.status}, body ${createRes.body}`);
   }
-  return { id: createRes.json().data.createMessage.id };
+  return { id: createRes.json().id };
 }
 
 export default function (data) {
-  const getRes = http.post(BASE_URL, JSON.stringify({
-    query: GET_COUNTER_QUERY,
-    variables: { id: data.id },
-  }), { headers: jsonHeaders, tags: { name: 'ReadCounter' } });
+  const getRes = http.get(`${BASE_URL}/messages/${data.id}`, { tags: { name: 'ReadCounter' } });
   const read = check(getRes, {
-    'read: status is 200, no errors': (r) => r.status === 200 && !r.json().errors,
+    'read: status is 200': (r) => r.status === 200,
   });
   if (!read) return;
 
-  const current = parseInt(getRes.json().data.message.content, 10);
-  const readVersion = getRes.json().data.message.version;
+  const current = parseInt(getRes.json().content, 10);
+  const readVersion = getRes.json().version;
 
-  const putRes = http.post(BASE_URL, JSON.stringify({
-    query: INCREMENT_MUTATION,
-    variables: { id: data.id, input: { content: String(current + 1), version: readVersion } },
+  const patchRes = http.patch(`${BASE_URL}/messages/${data.id}`, JSON.stringify({
+    content: String(current + 1),
+    version: readVersion,
   }), { headers: jsonHeaders, tags: { name: 'IncrementCounter' } });
 
-  const body = putRes.json();
-  const isSuccess = putRes.status === 200 && !body.errors;
-  const isConflict = putRes.status === 200 && body.errors && body.errors[0].extensions.code === 'CONFLICT';
+  const isSuccess = patchRes.status === 200;
+  const isConflict = patchRes.status === 409;
 
-  check(putRes, {
-    'write: success or CONFLICT': () => isSuccess || isConflict,
+  check(patchRes, {
+    'write: success or 409 CONFLICT': () => isSuccess || isConflict,
   });
 
   if (isSuccess) {
@@ -93,33 +88,31 @@ export default function (data) {
 }
 
 export function teardown(data) {
-  // The read-through Hazelcast cache (see src/cache.ts) can briefly lag its own eviction right
-  // at the tail of a burst of writes, so a single read here can under-report by a couple of
-  // counts even though the DB itself is already correct. Poll a few times and keep the max -
-  // the value is monotonically increasing, so this converges as soon as the cache catches up.
-  let finalValue = 0;
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const finalRes = http.post(BASE_URL, JSON.stringify({
-      query: GET_COUNTER_QUERY,
-      variables: { id: data.id },
-    }), { headers: jsonHeaders });
-    try {
-      finalValue = Math.max(finalValue, parseInt(finalRes.json().data.message.content, 10));
-    } catch (e) {
-      // ignore transient read errors while polling
+  // Reads are cache-aside (see app/cache.py). A slow reader can repopulate the cache with a
+  // pre-update row right after an update's eviction; the next stale-version 409 evicts it again,
+  // but no writers are left at the tail of a burst to do that. Poll until two consecutive reads
+  // agree so the check runs against settled state rather than a transient stale entry.
+  let content = NaN;
+  let version = NaN;
+  let previous = null;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const res = http.get(`${BASE_URL}/messages/${data.id}`);
+    if (res.status === 200) {
+      content = parseInt(res.json().content, 10);
+      version = res.json().version;
+      const snapshot = `${content}/${version}`;
+      if (snapshot === previous) break;
+      previous = snapshot;
     }
     sleep(0.3);
   }
-  finalCounterValue.add(finalValue);
+  finalCounterValue.add(content);
+  noLostUpdates.add(content === version);
 
-  console.log(`\nFinal counter value in DB (best-effort, cache-backed read): ${finalValue}`);
-  console.log('Compare this against "successful_increments" in the summary below: they should be '
-    + 'exactly equal. "write_conflicts" (CONFLICT errors) are expected under contention and are '
-    + 'not lost updates - the client is told to refetch and retry. A trailing gap of 1-2 here is '
-    + 'read-through cache lag in this script\'s own polling (see src/cache.ts), not a real loss.');
+  console.log(`\nFinal state: counter (content) = ${content}, version = ${version}.`);
+  console.log('They must be equal. Compare both against "successful_increments" in the summary '
+    + 'below: also exactly equal. "write_conflicts" (409s) are expected under contention and are '
+    + 'not lost updates - the client is told to refetch and retry.');
 
-  http.post(BASE_URL, JSON.stringify({
-    query: DELETE_MESSAGE_MUTATION,
-    variables: { id: data.id },
-  }), { headers: jsonHeaders });
+  http.del(`${BASE_URL}/messages/${data.id}`);
 }

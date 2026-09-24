@@ -5,7 +5,6 @@ resources:
   - resourcequota.yaml
   - secret.yaml
   - configmap.yaml
-  - postgres-init-configmap.yaml
   - postgres-statefulset.yaml
   - postgres-service.yaml
   - hazelcast-jmx-exporter-configmap.yaml
@@ -15,15 +14,8 @@ resources:
   - hpa.yaml
   - service.yaml
   - ingress.yaml
-  - issue-service-deployment.yaml
-  - issue-service-hpa.yaml
-  - issue-service-service.yaml
-  - issue-service-ingress.yaml
 
 images:
   - name: message-service
     newName: docker.io/miqui/message-service
-    newTag: latest
-  - name: issue-service
-    newName: docker.io/miqui/issue-service
     newTag: latest

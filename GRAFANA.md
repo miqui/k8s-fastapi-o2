@@ -1,80 +1,85 @@
 # Grafana Changes — OpenObserve Observability Rollout
 
-## `$service` variable on the API dashboards (`graphql-api`, `api-red`)
+## `$service` variable on the API dashboards (`message-service-api`, `api-red`, `http-operations`, `http-errors`)
 
-message-service and issue-service push identically named metrics (`graphql_requests_total`,
-`prisma_pool_*`, `nodejs_*`, ...) through the same OTel Collector, distinguished only by the
-`service_name` label. These two dashboards used to sum both APIs together, and `api-red`'s
-container panels were hardcoded to `container="message-service"`, so it mixed scopes.
+The API's metrics (`http_requests_total`, `db_pool_*`, `python_*`, ...) all reach Prometheus through
+the same OTel Collector, distinguished only by the `service_name` label (the resource attribute
+`service.name`). Every API dashboard has a multi-select **Service** dropdown (`message-service`,
+default All), so a second API pushing identically named metrics would appear as another option
+without any panel changes:
 
-Both now have a multi-select **Service** dropdown (`message-service`, `issue-service`, default All):
-
-- GraphQL / Prisma / Node.js series filter on `service_name=~"$service"`.
+- HTTP / DB / Python-runtime series filter on `service_name=~"$service"`.
 - cAdvisor / kube-state series filter on `container=~"$service"` or `pod=~"$service-.*"` — this
-  works because each container is named after its service (`message-service`, `issue-service`).
-- Per-service legends (`{{service_name}} / {{root_field}}`), and the Prisma-pool, CPU and
-  event-loop panels are aggregated (`sum` / `max`) instead of emitting one unlabelled series per pod.
-- **Ready Pods** replaces **Service Up** on `graphql-api`: the old query was
-  `up{job="otel-collector"}`, which only says the collector is scraped, not that the API is alive.
+  works because each container is named after its service (`message-service`).
+- Per-service legends (`{{service_name}} / {{route}}`), and the DB-pool, CPU and event-loop panels
+  are aggregated (`sum` / `max`) instead of emitting one unlabelled series per pod.
+- **Ready Pods** (on `message-service-api`) counts `kube_pod_status_ready` for the service's pods
+  rather than `up{job="otel-collector"}`, which only says the collector is scraped, not that the API
+  is alive.
 - **Error Ratio** and the overall errors line use `... or vector(0)` so they read 0, not "No data".
 
-`graphql_errors_total` is only created on the first error (the OTel counter emits nothing before its
-first `.add()`), so the per-root-field error panels stay empty on a healthy system rather than
-reading 0; the ratio and total panels use `or vector(0)` and the by-code panels say "No errors".
+`http_errors_total` is only created on the first error (the OTel counter emits nothing before its
+first `.add()`), so the per-route error panels stay empty on a healthy system rather than reading 0;
+the ratio and total panels use `or vector(0)` and the by-code panels say "No errors".
 
-Not changed: `graphql-api` uses `[1m]` rate windows and `api-red` uses `[5m]`, as before.
+`message-service-api` uses `[1m]` rate windows and `api-red` uses `[5m]`.
 
-## Schema-based metrics: `GraphQL Operations` and `GraphQL Errors` dashboards
+## Request metrics: `HTTP Operations` and `HTTP Errors` dashboards
 
-Two new dashboards (`graphql-operations`, `graphql-errors`, same ConfigMap), plus the existing
-per-operation panels on `graphql-api` / `api-red` re-pointed from `operation` to `root_field`.
+Two dashboards (`http-operations`, `http-errors`, same ConfigMap) break the request metrics down by
+HTTP method and route template, alongside the per-route panels on `message-service-api` / `api-red`.
 
-Both services' `metricsPlugin` now labels the `graphql_*` metrics with `operation_type`
-(`query` / `mutation` / `unresolved`), `root_field` (the schema field, aliases resolved) and, on
-`graphql_errors_total`, `error_code` (`extensions.code`). The old `operation` label (the client's
-`operationName`) is gone: it was client-controlled and unbounded, and every unnamed operation - i.e.
-all k6 traffic - landed in `anonymous`. Full details and caveats (multi-root-field counting, error
-attribution via the error `path`, the `unresolved` bucket) are in the README's
-"GraphQL Operation & Error Dashboards" section.
+The request-metrics middleware in `app/telemetry.py` labels `http_requests_total`,
+`http_request_duration_ms` and `http_errors_total` with `method`, `route` (the matched route
+*template*, e.g. `/messages/{id}`, or `unmatched`) and, on `http_requests_total`, `status_code`
+and, on `http_errors_total`, `error_code` (the problem+json `code`). The route is the template and
+never the raw path, so the client can't mint new series by varying ids. Health probes are excluded.
+Full details and caveats are in the README's "HTTP Operation & Error Dashboards" section.
 
-- **GraphQL Operations** (12 panels; Service / Operation type / Root field variables): request rate,
-  mutation share, p95/p99, error ratio, active root fields; rate, query-vs-mutation, p95 and average
-  latency by root field; a latency-distribution heatmap; a per-root-field summary table.
-- **GraphQL Errors** (11 panels; Service / Root field / Error code variables): error ratio, errors/s,
+- **HTTP Operations** (12 panels; Service / Method / Route variables): request rate, write share
+  (POST/PATCH/DELETE), p95/p99, error ratio, active routes; rate, rate-by-method, p95 and average
+  latency by route; a latency-distribution heatmap; a per-route summary table.
+- **HTTP Errors** (11 panels; Service / Route / Error code variables): error ratio, errors/s,
   server errors/s (`INTERNAL_SERVER_ERROR|UNKNOWN`, should stay 0), conflicts/s; errors by code, by
-  root field, ratio and conflict ratio by root field; client-input errors; `NOT_FOUND` by root field;
-  a totals table.
+  route, ratio and conflict ratio by route; client-input errors (`BAD_USER_INPUT`); `NOT_FOUND` by
+  route; a totals table.
 
 ### Rollout order (follow the ArgoCD image flow)
 
-The label change is in the service code, so it only reaches the cluster through the normal flow:
-merge -> GitHub Actions builds and pushes the images -> Argo CD Image Updater picks up the new tags ->
-Argo CD rolls the Deployments. Nothing is loaded or patched by hand. The Grafana ConfigMap ships through the
-`observability` Argo Application (`k8s/argocd/observability-application.yaml`) once that is registered;
-before it is, apply it with `kubectl apply -f k8s/observability/grafana-dashboard-json-configmap.yaml`.
-Either way, the new panels are empty (and `root_field` legends on the two older dashboards collapse) until
-the new images are running and have served traffic.
+The metric names and labels come from the service code, so they only reach the cluster through the
+normal flow: merge -> GitHub Actions builds and pushes the image -> Argo CD Image Updater picks up the
+new tag -> Argo CD rolls the Deployment. Nothing is loaded or patched by hand. The Grafana ConfigMap
+ships through the `observability` Argo Application (`k8s/argocd/observability-application.yaml`)
+once that is registered; before it is, apply it with
+`kubectl apply -f k8s/observability/grafana-dashboard-json-configmap.yaml`. Either way, the panels
+are empty until the image is running and has served traffic.
 
 ### Verification performed
 
-- Each service's real `metricsPlugin` and OTLP exporter were run against that service's real schema and
-  error helpers (stub resolvers, a local OTLP receiver), asserting the exact label sets for: plain
-  and named operations, multiple root fields, fragment/inline-fragment roots, aliases,
-  introspection, parse and validation failures, `NOT_FOUND` / `CONFLICT` / `BAD_USER_INPUT`, and that
-  errors in one root field aren't attributed to another. No `operation` attribute is emitted.
-- 18 of the new expressions - the exact strings shipped in the ConfigMap - were unit-tested with
-  `promtool test rules` against synthetic series with hand-computed expected values (rates,
-  ratios, `histogram_quantile` interpolation, the `or vector(0)` empty-error case, zero-error rows in
-  the summary table). All 62 GraphQL-dashboard expressions parse on the live Prometheus.
-- All 15 GraphQL documents in the k6 scripts (now named operations) validate against the real schema.
+Run on a fresh kind cluster with the real image (the manifests applied with `kubectl apply -k`
+rather than through Argo, since nothing was pushed to `main`), after generating traffic with the k6
+scripts:
+
+- **Every metric the dashboards reference exists, with the intended labels.** Prometheus had
+  `http_requests_total` (labels `method`, `route`, `status_code`, `service_name`, `k8s_pod_name`),
+  `http_errors_total` (`error_code` = `NOT_FOUND` / `BAD_USER_INPUT` / `CONFLICT`),
+  `http_request_duration_ms_{bucket,sum,count}`, `db_pool_connections_{open,busy,idle}`,
+  `db_client_queries_duration_avg_ms`, `python_process_memory_rss_bytes`,
+  `python_process_cpu_usage_ratio` and `python_eventloop_lag_p99_ms`. `route` was only ever a
+  template (`/messages/{id}`, `/authors/{id}`, `unmatched`, ...) and no `/health*` series existed.
+- **No unit double-suffix.** None of the app's instruments were renamed by the collector's
+  Prometheus exporter (`http_request_duration_ms_bucket`, not `..._ms_milliseconds_bucket`).
+- **All 60 PromQL expressions across the four dashboards** (panel targets plus the query
+  variables), with the template variables substituted, evaluated successfully against the live
+  Prometheus, and every one returned at least one series.
 - **Not verified visually:** Grafana itself was not driven, so panel rendering (the heatmap, the two
-  table transformations, the `$root_field` / `$error_code` query variables) is untested until the
-  rollout above. Live series with the new labels can't exist before then either.
+  table transformations, the `$route` / `$error_code` query variables) is untested beyond the
+  queries above.
 
 ## New dashboard: "OpenObserve Ops"
 
 Added as a new key (`openobserve-ops.json`) in
-`k8s/observability/grafana-dashboard-json-configmap.yaml`, alongside the five pre-existing
+`k8s/observability/grafana-dashboard-json-configmap.yaml`, alongside the other
 dashboards in that same ConfigMap. No changes were needed to
 `grafana-dashboard-provider-configmap.yaml` or `grafana-deployment.yaml` — the whole ConfigMap is
 already mounted as a directory (`/etc/grafana/provisioning/dashboards-json`), so a new key just
@@ -145,34 +150,3 @@ kubectl exec -n observability deploy/grafana -- grafana-cli admin reset-admin-pa
 
 No config files were changed for this — `grafana-secret.yaml` already had the correct value; only
 Grafana's own internal (sqlite) state was out of sync with it.
-
-## Planned: impact of the issue-service ITSM extension (not yet implemented)
-
-`issue-service`'s schema is gaining ITSM/ITIL concepts (Incident/Problem/Change/ServiceRequest -
-see `issue-service/prisma/schema.prisma`), which adds several new mutations (`createIncident`,
-`moveIncident`, `linkIncidentToProblem`, `createProblem`, `moveProblem`, `createChange`,
-`moveChange`, `linkChangeToProblem`, `createServiceRequest`, `moveServiceRequest`) and new root
-queries (`incident`, `problem`, `change`, `serviceRequest`, `incidents`, `serviceRequests`, plus a
-`kind` argument on `Project.issues`). This section tracks what that does and doesn't require from
-the dashboards, for whoever picks this up.
-
-- **No dashboard JSON changes needed for the new fields to show up.** `root_field` and `error_code`
-  are live Prometheus template variables (see "Schema-based metrics" above), not hardcoded lists -
-  the new mutations/queries will appear in the `GraphQL Operations` / `GraphQL Errors` dashboards'
-  variable dropdowns and per-root-field panels automatically once traffic exists, the same way
-  `moveIssue`/`attachLabel` did when issue-service was first added.
-- **The `Conflicts/s` panel's *description* text goes stale**, not its function: it currently reads
-  "CONFLICT: optimistic-lock version mismatches (`updateMessage`) and `deleteAuthor`/`attachLabel`
-  constraint conflicts" (`k8s/observability/grafana-dashboard-json-configmap.yaml`, panel id 4 on
-  `graphql-errors`). `linkIncidentToProblem` and `linkChangeToProblem` are two more CONFLICT sources
-  (cross-project link attempts) that won't be mentioned there. The underlying PromQL already filters
-  dynamically by `error_code="CONFLICT"`, so the panel's numbers are correct either way - this is a
-  one-line doc-text edit in the ConfigMap, not urgent.
-- **No `$service` dropdown changes** - ITSM traffic is still `service.name = "issue-service"`, same
-  container/label as today.
-- **Open question for whoever builds the dashboard-sized `incidents`/`serviceRequests` triage
-  queries later** (see the design discussion that preceded this schema change): if that ever grows
-  into its own Grafana panel (e.g. "open SEV1 count", "SLA breaches"), it would need to query
-  `issuedb` directly (via the Postgres exporter, same pattern as `pg_stat_statements` in
-  [PROMETHEUS.md](PROMETHEUS.md)) or a new business-metric OTel counter - `graphql_requests_total`
-  only measures API traffic, not domain state like "how many incidents are currently open."
