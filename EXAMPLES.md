@@ -113,9 +113,9 @@ curl -s -i -X PATCH "$BASE/messages/<MESSAGE_ID>" \
 HTTP/1.1 409 Conflict
 content-type: application/problem+json
 
-{"type":"about:blank","title":"Conflict","status":409,
+{"type":"/problems/conflict","title":"Conflict","status":409,
  "detail":"Message with ID '...' has changed since version 0 was read; refetch and retry.",
- "code":"CONFLICT"}
+ "instance":"/messages/<ID>","code":"CONFLICT"}
 ```
 
 ### 9. An author with their messages
@@ -139,10 +139,11 @@ curl -s -X POST "$BASE/messages" -H 'Content-Type: application/json' \
 
 ```json
 {
-  "type": "about:blank",
+  "type": "/problems/bad-user-input",
   "title": "Bad Request",
   "status": 400,
   "detail": "The request content was invalid or failed validation constraints.",
+  "instance": "/messages",
   "code": "BAD_USER_INPUT",
   "invalidParams": [
     { "name": "title", "reason": "title is required and cannot be blank" },
