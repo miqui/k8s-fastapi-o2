@@ -14,9 +14,9 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-ins
 # Stage 2: runtime. Same base image as the builder, so the venv's interpreter symlink resolves.
 FROM python:3.13-slim
 
-# Numeric uid/gid 1000: k8s/deployment.yaml sets runAsUser: 1000 + runAsNonRoot, and the kubelet
-# can only verify "non-root" for a numeric USER.
-RUN groupadd -g 1000 app && useradd -u 1000 -g 1000 -M -s /usr/sbin/nologin app
+# Numeric uid/gid 10001: k8s/deployment.yaml sets runAsUser: 10001 + runAsNonRoot, and the kubelet
+# can only verify "non-root" for a numeric USER. Above 10000 so it can't collide with a host user.
+RUN groupadd -g 10001 app && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin app
 
 ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
@@ -27,7 +27,7 @@ COPY --chown=app:app app/ app/
 COPY --chown=app:app migrations/ migrations/
 COPY --chown=app:app alembic.ini ./
 
-USER 1000:1000
+USER 10001:10001
 EXPOSE 8080
 
 # Migrations first (idempotent, and serialised across replicas by a Postgres advisory lock - see
