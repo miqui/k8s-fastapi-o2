@@ -1392,3 +1392,179 @@ data:
         }
       ]
     }
+  trivy-security.json: |
+    {
+      "title": "Trivy Security",
+      "uid": "trivy-security",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "1m",
+      "time": {"from": "now-24h", "to": "now"},
+      "description": "Trivy Operator scan results (k8s/argocd/trivy-operator-application.yaml, TRIVY.md). Counts, not CVE IDs - the per-CVE metric is off for cardinality; drill into the reports with kubectl.",
+      "templating": { "list": [
+        {
+          "name": "namespace",
+          "label": "Namespace",
+          "type": "query",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "definition": "label_values(trivy_image_vulnerabilities, namespace)",
+          "query": {"query": "label_values(trivy_image_vulnerabilities, namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+          "refresh": 2,
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "sort": 1,
+          "current": {"selected": true, "text": ["All"], "value": ["$__all"]}
+        },
+        {
+          "name": "severity",
+          "label": "Severity",
+          "type": "custom",
+          "query": "Critical,High,Medium,Low,Unknown",
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "current": {"selected": true, "text": ["All"], "value": ["$__all"]},
+          "options": [{"selected": true, "text": "All", "value": "$__all"}, {"selected": false, "text": "Critical", "value": "Critical"}, {"selected": false, "text": "High", "value": "High"}, {"selected": false, "text": "Medium", "value": "Medium"}, {"selected": false, "text": "Low", "value": "Low"}, {"selected": false, "text": "Unknown", "value": "Unknown"}]
+        }
+      ] },
+      "panels": [
+        {
+          "title": "Critical vulnerabilities",
+          "description": "Critical-severity CVEs across the selected namespaces. Counted per scanned workload container, so an image running in two workloads counts twice (the table below dedupes by image).",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+          "targets": [{"expr": "sum(trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"Critical\"})", "refId": "A", "instant": true}],
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "dark-red", "value": 1}]}}},
+          "id": 1,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "High vulnerabilities",
+          "description": "High-severity CVEs across the selected namespaces. Counted per scanned workload container, so an image running in two workloads counts twice (the table below dedupes by image).",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+          "targets": [{"expr": "sum(trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"High\"})", "refId": "A", "instant": true}],
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}},
+          "id": 2,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Medium vulnerabilities",
+          "description": "Medium-severity CVEs across the selected namespaces. Counted per scanned workload container, so an image running in two workloads counts twice (the table below dedupes by image).",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+          "targets": [{"expr": "sum(trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"Medium\"})", "refId": "A", "instant": true}],
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}},
+          "id": 3,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Low vulnerabilities",
+          "description": "Low-severity CVEs across the selected namespaces. Counted per scanned workload container, so an image running in two workloads counts twice (the table below dedupes by image).",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+          "targets": [{"expr": "sum(trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"Low\"})", "refId": "A", "instant": true}],
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}]}}},
+          "id": 4,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Exposed secrets",
+          "description": "Secrets (keys, tokens, passwords) Trivy found baked into image layers, any severity.",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+          "targets": [{"expr": "sum(trivy_image_exposedsecrets{namespace=~\"$namespace\"})", "refId": "A", "instant": true}],
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "dark-red", "value": 1}]}}},
+          "id": 5,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Failed config checks (Crit+High)",
+          "description": "Critical/High misconfigurations (ConfigAuditReports) on workloads, Services, Ingresses etc. in the selected namespaces.",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+          "targets": [{"expr": "sum(trivy_resource_configaudits{namespace=~\"$namespace\",severity=~\"Critical|High\"})", "refId": "A", "instant": true}],
+          "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}},
+          "id": 6,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Vulnerabilities by namespace",
+          "description": "CVE count per namespace, stacked by severity (filtered by $severity).",
+          "type": "barchart",
+          "gridPos": {"h": 9, "w": 12, "x": 0, "y": 4},
+          "targets": [{"expr": "sum by (namespace, severity) (trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=~\"$severity\"})", "format": "table", "instant": true, "refId": "A"}],
+          "transformations": [{"id": "groupingToMatrix", "options": {"columnField": "severity", "rowField": "namespace", "valueField": "Value"}}, {"id": "organize", "options": {"indexByName": {"namespace\\severity": 0, "Critical": 1, "High": 2, "Medium": 3, "Low": 4, "Unknown": 5}, "renameByName": {"namespace\\severity": "namespace"}}}],
+          "options": {"stacking": "normal", "orientation": "horizontal", "xField": "namespace", "barWidth": 0.6, "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}, "showValue": "never"},
+          "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "fillOpacity": 90, "lineWidth": 0}, "overrides": [{"matcher": {"id": "byName", "options": "Critical"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "dark-red"}}]}, {"matcher": {"id": "byName", "options": "High"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]}, {"matcher": {"id": "byName", "options": "Medium"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}]}, {"matcher": {"id": "byName", "options": "Low"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "yellow"}}]}, {"matcher": {"id": "byName", "options": "Unknown"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "gray"}}]}]},
+          "id": 7,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Vulnerabilities over time",
+          "description": "Total CVEs by severity. Steps when a scan finishes: a new image tag, the 24h report TTL re-scan, or a vulnerability DB update.",
+          "type": "timeseries",
+          "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
+          "targets": [{"expr": "sum by (severity) (trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=~\"$severity\"})", "legendFormat": "{{severity}}", "refId": "A"}],
+          "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "custom": {"lineWidth": 2, "fillOpacity": 0, "spanNulls": true}}, "overrides": [{"matcher": {"id": "byName", "options": "Critical"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "dark-red"}}]}, {"matcher": {"id": "byName", "options": "High"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]}, {"matcher": {"id": "byName", "options": "Medium"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}]}, {"matcher": {"id": "byName", "options": "Low"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "yellow"}}]}, {"matcher": {"id": "byName", "options": "Unknown"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "gray"}}]}]},
+          "id": 8,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Most vulnerable images",
+          "description": "One row per image (registry/repository:tag) with CVE counts by severity. max, not sum: the same image in several workloads has the same findings. Details: kubectl get vulnerabilityreports -A -o wide, then describe the one for the workload.",
+          "type": "table",
+          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 13},
+          "targets": [{"expr": "max by (image_registry, image_repository, image_tag) (trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"Critical\"})", "format": "table", "instant": true, "refId": "A"}, {"expr": "max by (image_registry, image_repository, image_tag) (trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"High\"})", "format": "table", "instant": true, "refId": "B"}, {"expr": "max by (image_registry, image_repository, image_tag) (trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"Medium\"})", "format": "table", "instant": true, "refId": "C"}, {"expr": "max by (image_registry, image_repository, image_tag) (trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"Low\"})", "format": "table", "instant": true, "refId": "D"}, {"expr": "count by (image_registry, image_repository, image_tag) (count by (image_registry, image_repository, image_tag, namespace, resource_name) (trivy_image_vulnerabilities{namespace=~\"$namespace\"}))", "format": "table", "instant": true, "refId": "E"}],
+          "transformations": [{"id": "merge", "options": {}}, {"id": "organize", "options": {"excludeByName": {"Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true, "Time 6": true}, "renameByName": {"Value #A": "Critical", "Value #B": "High", "Value #C": "Medium", "Value #D": "Low", "Value #E": "workloads"}, "indexByName": {"image_registry": 0, "image_repository": 1, "image_tag": 2, "workloads": 8, "Critical": 4, "High": 5, "Medium": 6, "Low": 7}}}, {"id": "filterByValue", "options": {"type": "exclude", "match": "all", "filters": [{"fieldName": "Critical", "config": {"id": "lowerOrEqual", "options": {"value": 0}}}, {"fieldName": "High", "config": {"id": "lowerOrEqual", "options": {"value": 0}}}, {"fieldName": "Medium", "config": {"id": "lowerOrEqual", "options": {"value": 0}}}, {"fieldName": "Low", "config": {"id": "lowerOrEqual", "options": {"value": 0}}}]}}, {"id": "sortBy", "options": {"sort": [{"field": "Critical", "desc": true}, {"field": "High", "desc": true}]}}],
+          "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false}},
+          "fieldConfig": {"defaults": {"decimals": 0, "custom": {"filterable": true}}, "overrides": [{"matcher": {"id": "byName", "options": "Critical"}, "properties": [{"id": "custom.width", "value": 90}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text", "value": null}, {"color": "dark-red", "value": 1}]}}]}, {"matcher": {"id": "byName", "options": "High"}, "properties": [{"id": "custom.width", "value": 90}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text", "value": null}, {"color": "red", "value": 1}]}}]}, {"matcher": {"id": "byName", "options": "Medium"}, "properties": [{"id": "custom.width", "value": 90}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text", "value": null}, {"color": "orange", "value": 1}]}}]}, {"matcher": {"id": "byName", "options": "Low"}, "properties": [{"id": "custom.width", "value": 90}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text", "value": null}, {"color": "yellow", "value": 1}]}}]}]},
+          "id": 9,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Misconfigurations by resource",
+          "description": "Failed config-audit checks (ConfigAuditReports) per resource. Details: kubectl get configauditreports -n <namespace> -o wide.",
+          "type": "table",
+          "gridPos": {"h": 9, "w": 24, "x": 0, "y": 23},
+          "targets": [{"expr": "sum by (namespace, resource_kind, resource_name) (trivy_resource_configaudits{namespace=~\"$namespace\",severity=\"Critical\"})", "format": "table", "instant": true, "refId": "A"}, {"expr": "sum by (namespace, resource_kind, resource_name) (trivy_resource_configaudits{namespace=~\"$namespace\",severity=\"High\"})", "format": "table", "instant": true, "refId": "B"}, {"expr": "sum by (namespace, resource_kind, resource_name) (trivy_resource_configaudits{namespace=~\"$namespace\",severity=\"Medium\"})", "format": "table", "instant": true, "refId": "C"}, {"expr": "sum by (namespace, resource_kind, resource_name) (trivy_resource_configaudits{namespace=~\"$namespace\",severity=\"Low\"})", "format": "table", "instant": true, "refId": "D"}],
+          "transformations": [{"id": "merge", "options": {}}, {"id": "organize", "options": {"excludeByName": {"Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "Time 4": true, "Time 5": true, "Time 6": true}, "renameByName": {"Value #A": "Critical", "Value #B": "High", "Value #C": "Medium", "Value #D": "Low"}, "indexByName": {"namespace": 0, "resource_kind": 1, "resource_name": 2, "Critical": 3, "High": 4, "Medium": 5, "Low": 6}}}, {"id": "filterByValue", "options": {"type": "exclude", "match": "all", "filters": [{"fieldName": "Critical", "config": {"id": "lowerOrEqual", "options": {"value": 0}}}, {"fieldName": "High", "config": {"id": "lowerOrEqual", "options": {"value": 0}}}, {"fieldName": "Medium", "config": {"id": "lowerOrEqual", "options": {"value": 0}}}, {"fieldName": "Low", "config": {"id": "lowerOrEqual", "options": {"value": 0}}}]}}, {"id": "sortBy", "options": {"sort": [{"field": "Critical", "desc": true}, {"field": "High", "desc": true}]}}],
+          "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false}},
+          "fieldConfig": {"defaults": {"decimals": 0, "custom": {"filterable": true}}, "overrides": [{"matcher": {"id": "byName", "options": "Critical"}, "properties": [{"id": "custom.width", "value": 90}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text", "value": null}, {"color": "dark-red", "value": 1}]}}]}, {"matcher": {"id": "byName", "options": "High"}, "properties": [{"id": "custom.width", "value": 90}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text", "value": null}, {"color": "red", "value": 1}]}}]}, {"matcher": {"id": "byName", "options": "Medium"}, "properties": [{"id": "custom.width", "value": 90}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text", "value": null}, {"color": "orange", "value": 1}]}}]}, {"matcher": {"id": "byName", "options": "Low"}, "properties": [{"id": "custom.width", "value": 90}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text", "value": null}, {"color": "yellow", "value": 1}]}}]}]},
+          "id": 10,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "RBAC findings by severity",
+          "description": "Failed RBAC assessment checks on Roles (namespaced, filtered by $namespace) and ClusterRoles (cluster-wide, not filtered). The metrics only carry the report name (role-<name>, or role-<hash> when too long); see TRIVY.md for the kubectl command that maps reports to roles.",
+          "type": "barchart",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+          "targets": [{"expr": "sum by (severity) (trivy_role_rbacassessments{namespace=~\"$namespace\",severity=~\"$severity\"})", "format": "table", "instant": true, "refId": "A"}, {"expr": "sum by (severity) (trivy_clusterrole_clusterrbacassessments{severity=~\"$severity\"})", "format": "table", "instant": true, "refId": "B"}],
+          "transformations": [{"id": "joinByField", "options": {"byField": "severity", "mode": "outer"}}, {"id": "organize", "options": {"excludeByName": {"Time 1": true, "Time 2": true}, "renameByName": {"Value #A": "Roles", "Value #B": "ClusterRoles"}}}],
+          "options": {"orientation": "horizontal", "xField": "severity", "stacking": "none", "barWidth": 0.7, "groupWidth": 0.8, "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}, "showValue": "auto"},
+          "fieldConfig": {"defaults": {"unit": "none", "decimals": 0, "fillOpacity": 90, "lineWidth": 0}, "overrides": [{"matcher": {"id": "byName", "options": "Roles"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}]}, {"matcher": {"id": "byName", "options": "ClusterRoles"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "purple"}}]}]},
+          "id": 11,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        },
+        {
+          "title": "Cluster compliance",
+          "description": "Controls passing/failing per compliance spec (ClusterComplianceReports, regenerated every 6h - compliance.cron). Details: kubectl get clustercompliancereport <name> -o yaml.",
+          "type": "table",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+          "targets": [{"expr": "sum by (title, status) (trivy_cluster_compliance)", "format": "table", "instant": true, "refId": "A"}],
+          "transformations": [{"id": "groupingToMatrix", "options": {"columnField": "status", "rowField": "title", "valueField": "Value"}}, {"id": "organize", "options": {"renameByName": {"title\\status": "spec"}, "indexByName": {"title\\status": 0, "Pass": 1, "Fail": 2}}}],
+          "options": {"showHeader": true, "cellHeight": "sm"},
+          "fieldConfig": {"defaults": {"decimals": 0}, "overrides": [{"matcher": {"id": "byName", "options": "Fail"}, "properties": [{"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "thresholds"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}]}, {"matcher": {"id": "byName", "options": "Pass"}, "properties": [{"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]}]},
+          "id": 12,
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        }
+      ]
+    }
