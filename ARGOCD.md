@@ -15,6 +15,7 @@ kubectl usage that I did not run here.
 | Application: `default` namespace (Postgres, Hazelcast, message-service, Ingress, quotas) | `fastapi-o2` | `k8s/argocd/application.yaml`, syncs `k8s/` |
 | Application: Kyverno policies + PolicyExceptions | `kyverno-policies` | `k8s/argocd/policies-application.yaml`, syncs `k8s/policies/` |
 | Application: observability stack (OTel Collector, Prometheus, Grafana + dashboards, kube-state-metrics, node-exporter, log collector, the namespace) | `observability` | `k8s/argocd/observability-application.yaml`, syncs `k8s/observability/` |
+| Application: Trivy Operator (upstream Helm chart + values from this repo, into `trivy-system`) | `trivy-operator` | `k8s/argocd/trivy-operator-application.yaml`, chart `aqua/trivy-operator` + `$values/k8s/trivy-operator/` - see [TRIVY.md](TRIVY.md) |
 | Image Updater config | `ImageUpdater/fastapi-o2` | `k8s/argocd/image-updater.yaml` |
 | UI | `http://argocd.localhost/` | `k8s/argocd/ingress.yaml` |
 

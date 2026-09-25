@@ -39,7 +39,7 @@ echo "=> 1Password CLI is signed in and all required secrets are present."
 #     anonymously, so if it doesn't exist (or is private) every Application sits at sync status
 #     "Unknown" ("authentication required: Repository not found") and the first-sync waits below
 #     time out ~10 minutes into the script. Fail here instead, before creating the cluster.
-for app_file in k8s/argocd/application.yaml k8s/argocd/observability-application.yaml k8s/argocd/policies-application.yaml; do
+for app_file in k8s/argocd/application.yaml k8s/argocd/observability-application.yaml k8s/argocd/policies-application.yaml k8s/argocd/trivy-operator-application.yaml; do
   APP_REPO_URL="$(awk '/repoURL:/ {print $2; exit}' "${app_file}")"
   APP_REVISION="$(awk '/targetRevision:/ {print $2; exit}' "${app_file}")"
   echo "=> Checking ${APP_REPO_URL} (${APP_REVISION}) is readable by ArgoCD..."
@@ -231,6 +231,19 @@ echo "=> Waiting for the policies Application's first sync..."
 kubectl wait --namespace argocd \
   --for=jsonpath='{.status.sync.status}'=Synced application/kyverno-policies \
   --timeout=180s
+
+# 5e. Register the ArgoCD Application that installs the Trivy Operator (upstream Helm chart, values
+#     from k8s/trivy-operator/ on main - see TRIVY.md). It creates its own trivy-system namespace.
+#     Only waits for Synced: the first sync can take a retry or two while the chart's CRDs are
+#     established, and the scans themselves (VulnerabilityReports etc.) keep arriving for minutes
+#     afterwards - nothing later in this script depends on them. Before step 6 so the API
+#     workloads get scanned as soon as they appear.
+echo "=> Registering the Trivy Operator ArgoCD Application..."
+kubectl apply -f k8s/argocd/trivy-operator-application.yaml
+echo "=> Waiting for the Trivy Operator Application's first sync..."
+kubectl wait --namespace argocd \
+  --for=jsonpath='{.status.sync.status}'=Synced application/trivy-operator \
+  --timeout=300s
 
 # 6. Register the ArgoCD Application that owns k8s/ (Postgres, Hazelcast, message-service,
 #    Ingress, ResourceQuota - everything k8s/kustomization.yaml produces).

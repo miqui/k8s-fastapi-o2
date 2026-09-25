@@ -314,6 +314,19 @@ A `kubectl` cheat sheet for debugging denials, audit findings and Kyverno itself
   "missing permissions". A fresh install doesn't hit this: the grant is in the Helm values, so it
   already exists when the policies are first created.
 
+## Vulnerability Scanning with Trivy Operator
+
+[Trivy Operator](https://github.com/aquasecurity/trivy-operator) continuously scans every workload's
+images (CVEs, baked-in secrets) and the cluster's resources (misconfigurations, RBAC, CIS/NSA/PSS
+compliance), storing results as `VulnerabilityReport`, `ConfigAuditReport` etc. objects. It's
+installed by its own Argo CD Application (`k8s/argocd/trivy-operator-application.yaml`: upstream
+Helm chart plus `k8s/trivy-operator/trivy-operator-values.yaml` from this repo) into `trivy-system`.
+Prometheus scrapes its metrics and the **Trivy Security** Grafana dashboard
+(`http://grafana.localhost/d/trivy-security`) summarises them by severity, namespace and image.
+
+It only reports; Kyverno is what enforces. Setup choices, `kubectl` commands for drilling into
+individual CVEs and findings, and the dashboard's panels are in [TRIVY.md](TRIVY.md).
+
 ## Git history
 
 The local `.git` directory was carried over on purpose, as background reference: `git log` /
@@ -426,6 +439,10 @@ server is PID 1 and receives `SIGTERM` directly.
     syncing `k8s/policies/`) and waits for its first sync - *before* the app `Application` below,
     so the enforce policies already exist when the workloads first sync. It tracks `main`, so
     `k8s/policies/` has to be merged before you run the script.
+  - Registers the `trivy-operator` ArgoCD `Application` (`k8s/argocd/trivy-operator-application.yaml`:
+    the upstream `aqua/trivy-operator` Helm chart with `k8s/trivy-operator/trivy-operator-values.yaml`
+    from `main`) and waits for its first sync; scan results keep arriving for minutes after. See
+    [TRIVY.md](TRIVY.md).
   - Registers the ArgoCD `Application` that owns `k8s/` (replacing a direct `kubectl apply -k
     k8s/`): `Secret` + `ConfigMap`s, the `postgres` `StatefulSet`/headless `Service` (which creates
     `messagedb` via `POSTGRES_DB`), the `hazelcast` `Deployment`/`Service`, and the `message-service`
