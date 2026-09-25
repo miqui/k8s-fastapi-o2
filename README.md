@@ -232,7 +232,7 @@ ReplicaSet events. `disallow-latest-tag` is audit-only on purpose: `k8s/kustomiz
 tag, so denying it would block the first rollout.
 
 **Hardened workloads.** To pass the enforce set, the `default`-namespace workloads now set a
-`securityContext`: message-service runs as uid/gid 1000 (the image's numeric `app` user - the kubelet can only verify
+`securityContext`: message-service runs as uid/gid 10001 with a read-only root filesystem (the image's numeric `app` user - the kubelet can only verify
 `runAsNonRoot` for a numeric uid, so `runAsUser` is set explicitly as well), postgres
 as 70 (its exporter sidecar as 65534) and hazelcast as 100:101, all with privilege escalation off and
 all capabilities dropped. A Postgres volume first initialized by the old root-started container is
@@ -396,11 +396,11 @@ docker exec message-postgres psql -U message_app -d messagedb -c 'CREATE DATABAS
 
 ```bash
 docker build -t message-service:local .
-docker run --rm --entrypoint id message-service:local   # uid=1000(app) gid=1000(app)
+docker run --rm --entrypoint id message-service:local   # uid=10001(app) gid=10001(app)
 ```
 
 Multi-stage build: `uv sync --frozen` from `uv.lock` into a venv, copied into a slim runtime image
-that runs as uid/gid 1000. The entrypoint is `alembic upgrade head && exec python -m app`, so the
+that runs as uid/gid 10001. The entrypoint is `alembic upgrade head && exec python -m app`, so the
 server is PID 1 and receives `SIGTERM` directly.
 
 ---
