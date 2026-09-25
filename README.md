@@ -348,7 +348,7 @@ docker run --rm -d --name message-postgres \
 
 docker run --rm -d --name message-hazelcast \
   -e HZ_CLUSTERNAME=message-service-cache \
-  -p 5701:5701 hazelcast/hazelcast:5.5.0
+  -p 5701:5701 hazelcast/hazelcast:5.7.0
 
 uv sync
 uv run alembic upgrade head
@@ -695,7 +695,7 @@ local dev cluster, `k8s/hazelcast-deployment.yaml` instead attaches
 member's own JVM - a free, open-source, in-process javaagent (no separate Hazelcast license, no
 remote JMX/RMI port needed) that reads the member's JMX MBeans and re-exposes them as Prometheus
 text format on its own port. This is entirely on the Hazelcast server side and unaffected by the
-app's own language - the standalone `hazelcast/hazelcast:5.5.0` image still runs its own JVM
+app's own language - the standalone `hazelcast/hazelcast:5.7.0` image still runs its own JVM
 regardless of what language the client (`message-service`) is written in.
 
 - An `initContainer` (`curlimages/curl`) downloads the agent jar into a volume shared with the
