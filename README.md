@@ -273,7 +273,8 @@ CLI pinned to `v1.19.1` (SHA-256-checked) to match the Helm chart; bump the two 
 ### Working with the policies
 
 A `kubectl` cheat sheet for debugging denials, audit findings and Kyverno itself is in
-[KYVERNO.md](KYVERNO.md).
+[KYVERNO.md](KYVERNO.md). A point-in-time review of the policy set, with the gaps it found and the
+recommended follow-up (none of it implemented), is in [KYVERNO-REVIEW.md](KYVERNO-REVIEW.md).
 
 - **Reports**: audit findings, and exceptions applied, appear in Kyverno's policy reports
   (`kubectl get policyreport -A`, plus `kubectl get clusterpolicyreport` for cluster-scoped ones).
